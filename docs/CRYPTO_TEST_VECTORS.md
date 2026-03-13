@@ -13,13 +13,22 @@ This vector uses a fixed ephemeral private key to ensure the resulting stealth a
 
 **Intermediate Values:**
 *   **Sender Ephemeral Public Key (R = r * G):** `0x02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27`
-*   **Shared Secret Point (S = r * Recipient_PubKey):** *(ECDH Point)*
-*   **Hashed Secret (h = Keccak256(S.x)):** *(Deterministic 32-byte hash)*
-*   **View Tag:** *(First byte of hashed secret)*
+
+**Shared Secret Point (S = r * Recipient_PubKey):** 
+`0x77e0510d5042e2f5e9e59c977b81eeed590cf7d20c1c51da451a8eaa9fdc45ff`
+
+**Hashed Secret (h = Keccak256(S.x)):** 
+`0xafde64e1f4b4af8f85678e891cbfea8ec42cc250356d40f91ed36d071f20b268`
+
+**View Tag:** 
+`0xaf`
 
 **Expected Outputs:**
-*   **Stealth Public Key (P_stealth = Recipient_PubKey + h * G):** *(Uncompressed 64-byte key)*
-*   **Stealth EVM Address:** *(Last 20 bytes of Keccak256(P_stealth))*
+**Stealth Public Key (P_stealth):** 
+`0x04ef3b657172f4abd14c9dcb782fc126928e08e5c773b241c2252184424ce275fbc86bf292eb10a1a58f5ab0ab2522ac9d80d857e97f42ab2df2502f49c9f31272`
+
+**Stealth EVM Address:** 
+`0x9817cd14301C3108dA553c572E597D666B1829c3`
 
 ## Test Vector 2: Handling Edge Cases
 
