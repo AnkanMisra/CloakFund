@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ethers::prelude::*;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::config::WatcherConfig;
 use crate::convex_client::ConvexRepository;
@@ -46,43 +46,10 @@ impl SweeperService {
             return Ok(());
         }
 
-        info!("Found {} pending sweep job(s)", jobs.len());
-
-        for job in jobs {
-            info!("Processing sweep job for deposit {}", job.deposit_id);
-
-            // 1. Mark job as broadcasting to lock it
-            if let Err(e) = self
-                .convex
-                .update_sweep_job_status(&job.id, "broadcasting", None)
-                .await
-            {
-                error!("Failed to lock sweep job {}: {:?}", job.id, e);
-                continue;
-            }
-
-            // TODO: Phase 3
-            // 2. Fetch deposit & ephemeral address details from Convex
-            // 3. Recover ephemeral private key using stealth logic & backend viewing key
-            // 4. Calculate gas and construct sweep transaction
-            // 5. Sign transaction and broadcast via provider
-            // 6. Zeroize private key from memory
-            // 7. Update job status to "completed" and save the sweep_tx_hash
-
-            // For now, mock completion
-            let mock_tx_hash = format!("0xmock_sweep_{}", job.deposit_id);
-
-            if let Err(e) = self
-                .convex
-                .update_sweep_job_status(&job.id, "completed", Some(mock_tx_hash))
-                .await
-            {
-                error!("Failed to complete sweep job {}: {:?}", job.id, e);
-                // Attempt to revert to queued if completion fails?
-            } else {
-                info!("Successfully completed sweep job {}", job.id);
-            }
-        }
+        warn!(
+            "Sweeper not yet implemented (Phase 6). {} jobs queued but not swept.",
+            jobs.len()
+        );
 
         Ok(())
     }

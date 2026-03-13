@@ -142,6 +142,74 @@ export const createEphemeralAddress = mutation({
   },
 });
 
+export const createWithEphemeralAddress = mutation({
+  args: {
+    userId: v.optional(v.id("users")),
+    ensName: v.optional(v.string()),
+    recipientPublicKeyHex: v.string(),
+    metadata: v.optional(v.any()),
+    chainId: v.optional(v.number()),
+    network: v.optional(v.string()),
+    stealthAddress: v.string(),
+    ephemeralPubkeyHex: v.string(),
+    viewTag: v.number(),
+  },
+  returns: v.object({
+    paylinkId: v.id("paylinks"),
+    ephemeralAddressId: v.id("ephemeralAddresses"),
+    stealthAddress: v.string(),
+    ephemeralPubkeyHex: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    if (args.viewTag < 0 || args.viewTag > 255) {
+      throw new Error("viewTag must be between 0 and 255");
+    }
+
+    const normalizedStealthAddress = normalizeAddress(args.stealthAddress);
+    const normalizedEphemeralPubkey = normalizeHex(args.ephemeralPubkeyHex);
+    const chainId = args.chainId ?? 8453;
+    const network = args.network ?? "base";
+
+    const existing = await ctx.db
+      .query("ephemeralAddresses")
+      .withIndex("by_chain_and_address", (q) =>
+        q.eq("chainId", chainId).eq("stealthAddress", normalizedStealthAddress),
+      )
+      .unique();
+
+    if (existing) {
+      throw new Error("Stealth address already registered");
+    }
+
+    const paylinkId = await ctx.db.insert("paylinks", {
+      userId: args.userId,
+      ensName: args.ensName,
+      recipientPublicKeyHex: normalizeHex(args.recipientPublicKeyHex),
+      status: "active",
+      metadata: args.metadata,
+      chainId,
+      network,
+    });
+
+    const ephemeralAddressId = await ctx.db.insert("ephemeralAddresses", {
+      paylinkId,
+      stealthAddress: normalizedStealthAddress,
+      ephemeralPubkeyHex: normalizedEphemeralPubkey,
+      viewTag: args.viewTag,
+      chainId,
+      network,
+      status: "announced",
+    });
+
+    return {
+      paylinkId,
+      ephemeralAddressId,
+      stealthAddress: normalizedStealthAddress,
+      ephemeralPubkeyHex: normalizedEphemeralPubkey,
+    };
+  },
+});
+
 export const getById = query({
   args: {
     paylinkId: v.id("paylinks"),

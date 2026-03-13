@@ -12,5 +12,8 @@
   },
   "dependencies": {
     "convex": "^1.33.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }

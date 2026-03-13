@@ -36,6 +36,34 @@ impl ConvexRepository {
         })
     }
 
+    /// Creates a new paylink and its associated ephemeral address transactionally.
+    pub async fn create_paylink_with_address(
+        &self,
+        paylink: &crate::models::NewPaylinkWithAddress,
+    ) -> Result<serde_json::Value> {
+        let json_val = serde_json::to_value(paylink)?;
+        let convex_val = json_to_convex(json_val);
+
+        let args = if let convex::Value::Object(map) = convex_val {
+            map
+        } else {
+            anyhow::bail!("Invalid paylink with address object")
+        };
+
+        let mut client = self.client.lock().await;
+        let result = client
+            .mutation("paylinks:createWithEphemeralAddress", args)
+            .await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
     /// Creates a new paylink in Convex.
     pub async fn create_paylink(
         &self,

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -11,22 +12,26 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::convex_client::ConvexRepository;
 
-pub fn create_router(state: Arc<ConvexRepository>) -> Router {
+pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let cors = CorsLayer::new()
-        .allow_origin(frontend_url.parse::<HeaderValue>().unwrap())
+        .allow_origin(
+            frontend_url
+                .parse::<HeaderValue>()
+                .context("FRONTEND_URL is not a valid HTTP header value")?,
+        )
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
         .allow_headers(tower_http::cors::Any);
 
-    Router::new()
+    Ok(Router::new()
         .route("/health", get(health_check))
         .route("/api/v1/paylink", post(create_paylink))
         .route("/api/v1/paylink/:id", get(get_paylink))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(state))
 }
 
 async fn health_check() -> impl IntoResponse {
@@ -57,16 +62,19 @@ async fn create_paylink(
             }
         };
 
-    let new_paylink = crate::models::NewPaylink {
+    let new_paylink = crate::models::NewPaylinkWithAddress {
         user_id: None,
         ens_name: payload.ens_name,
         recipient_public_key_hex: payload.recipient_public_key_hex,
         metadata: payload.metadata,
         chain_id,
         network: network.clone(),
+        stealth_address: stealth_address.clone(),
+        ephemeral_pubkey_hex: ephemeral_pubkey_hex.clone(),
+        view_tag,
     };
 
-    let paylink_val = match state.create_paylink(&new_paylink).await {
+    let paylink_val = match state.create_paylink_with_address(&new_paylink).await {
         Ok(val) => val,
         Err(e) => {
             return (
@@ -78,23 +86,6 @@ async fn create_paylink(
     };
 
     let paylink_id = paylink_val["paylinkId"].as_str().unwrap_or("").to_string();
-
-    let new_ephem = crate::models::NewEphemeralAddress {
-        paylink_id: paylink_id.clone(),
-        stealth_address: stealth_address.clone(),
-        ephemeral_pubkey_hex: ephemeral_pubkey_hex.clone(),
-        view_tag,
-        chain_id,
-        network,
-    };
-
-    if let Err(e) = state.create_ephemeral_address(&new_ephem).await {
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to create ephemeral address: {}", e) })),
-        )
-            .into_response();
-    }
 
     let response = crate::models::CreatePaylinkResponse {
         paylink_id,

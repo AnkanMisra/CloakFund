@@ -159,6 +159,20 @@ pub struct NewPaylink {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NewPaylinkWithAddress {
+    pub user_id: Option<String>,
+    pub ens_name: Option<String>,
+    pub recipient_public_key_hex: String,
+    pub metadata: Option<serde_json::Value>,
+    pub chain_id: u64,
+    pub network: String,
+    pub stealth_address: String,
+    pub ephemeral_pubkey_hex: String,
+    pub view_tag: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewEphemeralAddress {
     pub paylink_id: String,
     pub stealth_address: String,

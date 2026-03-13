@@ -87,7 +87,7 @@ async fn run_server() -> anyhow::Result<()> {
     });
 
     info!("Starting API server on {}", config.server.bind_addr);
-    let app = create_router(convex);
+    let app = create_router(convex)?;
     let listener = TcpListener::bind(config.server.bind_addr).await?;
     axum::serve(listener, app).await?;
 
