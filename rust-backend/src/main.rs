@@ -1,27 +1,46 @@
-mod stealth;
-
+use rust_backend::{
+    AppConfig, ConvexRepository, SweeperService, WatcherService, create_router, stealth,
+};
 use std::env;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+use tracing::{error, info};
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = env::args().collect();
 
-    if args.len() < 3 {
+    if args.len() < 2 {
         eprintln!("Usage: {} <command> <args...>", args[0]);
         eprintln!("Commands:");
+        eprintln!("  serve                          Start the API server and watcher");
         eprintln!("  generate <recipient_pubkey>    Generate stealth address");
         eprintln!("  recover <recipient_priv> <ephemeral_pub>    Recover stealth private key");
         return;
     }
 
     match args[1].as_str() {
-        "generate" => match stealth::generate_stealth_address(&args[2]) {
-            Ok((addr, ephem, tag)) => {
-                println!("Stealth Address: {}", addr);
-                println!("Ephemeral Pubkey: {}", ephem);
-                println!("View Tag: 0x{:02x}", tag);
+        "serve" => {
+            if let Err(e) = run_server().await {
+                error!("Server error: {}", e);
             }
-            Err(e) => eprintln!("Error: {}", e),
-        },
+        }
+        "generate" => {
+            if args.len() < 3 {
+                eprintln!("Missing arguments for generate");
+                return;
+            }
+            match stealth::generate_stealth_address(&args[2]) {
+                Ok((addr, ephem, tag)) => {
+                    println!("Stealth Address: {}", addr);
+                    println!("Ephemeral Pubkey: {}", ephem);
+                    println!("View Tag: 0x{:02x}", tag);
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
         "recover" => {
             if args.len() < 4 {
                 eprintln!("Missing arguments for recover");
@@ -34,4 +53,43 @@ fn main() {
         }
         _ => eprintln!("Unknown command: {}", args[1]),
     }
+}
+
+async fn run_server() -> anyhow::Result<()> {
+    let mut config = AppConfig::from_env()?;
+
+    info!("Initializing Convex client...");
+    let convex = Arc::new(ConvexRepository::new(&config.convex).await?);
+
+    info!("Fetching last watcher checkpoint...");
+    if let Ok(Some(checkpoint)) = convex.get_latest_checkpoint().await {
+        let resume_block = checkpoint
+            .latest_processed_block
+            .unwrap_or(checkpoint.start_block);
+        config.watcher.start_block = Some(resume_block);
+        info!("Resuming watcher from block {}", resume_block);
+    }
+
+    info!("Starting watcher service...");
+    let watcher = WatcherService::new(config.watcher.clone(), convex.clone());
+    tokio::spawn(async move {
+        if let Err(e) = watcher.start().await {
+            error!("Watcher service failed: {}", e);
+        }
+    });
+
+    info!("Starting sweeper service...");
+    let sweeper = SweeperService::new(config.watcher.clone(), convex.clone());
+    tokio::spawn(async move {
+        if let Err(e) = sweeper.start().await {
+            error!("Sweeper service failed: {}", e);
+        }
+    });
+
+    info!("Starting API server on {}", config.server.bind_addr);
+    let app = create_router(convex)?;
+    let listener = TcpListener::bind(config.server.bind_addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }

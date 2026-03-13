@@ -65,4 +65,40 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 
 ---
 
+## Phase 2: Deposit Watcher / Indexer
+
+### What was done (Convex Pivot)
+- Pivoted the persistence layer from Postgres/SQLx to Convex for faster hackathon iteration.
+- Scaffolded the Convex backend project in the `convex/` directory.
+- Defined the Convex schema with tables for `paylinks`, `ephemeralAddresses`, and `deposits`.
+- Implemented Convex server functions for paylink creation, stealth address persistence, and deposit status updates (`paylinks.ts`, `deposits.ts`).
+- Exposed a minimal Convex HTTP API (`http.ts`) for health and deposit-status checks.
+- Updated the Rust backend `config.rs` to support Convex deployment variables.
+- Created comprehensive Rust data structures in `models.rs` corresponding to the Convex backend types.
+
+### How it was done
+- **Convex Schema:** Designed indexes around `chainId`, `status`, and `txHash` to efficiently query pending/confirmed deposits.
+- **Rust Types:** Built `DepositRecord`, `PaylinkRecord`, and status enums (`ConfirmationStatus`, `EphemeralAddressStatus`) with strict `serde` serialization to interface seamlessly with Convex HTTP actions.
+
+### Why it was done
+- **Speed & Simplicity:** Convex provides a managed real-time database with built-in server functions, significantly reducing boilerplate compared to setting up Postgres migrations and local DB containers.
+- **Separation of Concerns:** Rust handles the heavy lifting of blockchain watching and cryptography, while Convex serves as the high-availability data and API layer for the frontend.
+
+### What was recently completed
+- Implemented the `convex_client.rs` bridge to interact with Convex backend functions securely from Rust.
+- Implemented `watcher.rs` using `ethers-rs` WebSocket subscriptions to listen to the Base network for native and ERC20 token transfers.
+- Connected the pipeline: Base new blocks -> Scan transactions and logs -> Check Convex for matching ephemeral addresses -> Submit matching deposits via `upsertDeposit`.
+- Implemented block confirmation tracking and reorg handling in the watcher.
+- Integrated the watcher and a minimal Axum API into `main.rs` via a new `serve` command.
+- Provided a demonstration script (`scripts/watcher_test.sh`) that simulates a deposit and verifies Convex state updates, meeting the phase's final deliverable requirements.
+
+### Hardening and Bug Fixes
+- **Historical Block Catch-up:** Added logic to `watcher.rs` to fetch the `latest_processed_block` checkpoint from Convex on startup, automatically syncing missed blocks during downtime before opening the real-time WebSocket.
+- **Serialization Alignment:** Fixed Rust-to-Convex mapping by enforcing `camelCase` `serde` serialization for all cross-boundary models and explicitly renaming `_id` and `_creationTime`.
+- **Chain Reorg Robustness:** Corrected the reorg flow to affirmatively call the `mark_deposit_reorged` Convex mutation when an indexed transaction shifts blocks, preventing double-counting.
+- **Safety Checks:** Added data length checks for ERC20 parsing and fallback handling for missing block hashes to prevent crashes and silent skipping.
+- **Convex Admin Authentication:** Integrated `CONVEX_ADMIN_KEY` handling in the Rust client to authenticate backend mutations safely.
+
+---
+
 *(This log will be continuously updated as subsequent phases are completed.)*

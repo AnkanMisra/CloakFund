@@ -1,0 +1,19 @@
+{
+  "name": "cloakfund",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CloakFund Convex project setup for backend data and functions",
+  "scripts": {
+    "convex:dev": "npx convex dev",
+    "convex:dev:once": "npx convex dev --once",
+    "convex:deploy": "npx convex deploy",
+    "convex:dashboard": "npx convex dashboard",
+    "convex:run": "npx convex run"
+  },
+  "dependencies": {
+    "convex": "^1.33.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

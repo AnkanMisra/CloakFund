@@ -60,13 +60,13 @@ pub fn generate_stealth_address(recipient_pub_hex: &str) -> Result<(String, Stri
     // 4. Derive a deterministic scalar from the shared secret
     // We use Keccak256 as the KDF for simplicity in this EVM-compatible context
     let mut hasher = Keccak256::new();
-    hasher.update(&shared_secret);
+    hasher.update(shared_secret);
     let hashed_secret = hasher.finalize();
 
     let view_tag = hashed_secret[0]; // Optional: view tag for faster scanning
 
     // Derive scalar from the hash
-    let derived_scalar_opt: Option<Scalar> = Scalar::from_repr(hashed_secret.into()).into();
+    let derived_scalar_opt: Option<Scalar> = Scalar::from_repr(hashed_secret).into();
     let derived_scalar = derived_scalar_opt.ok_or("Hash output exceeded curve order")?;
 
     // 5. Compute the stealth public key: P_stealth = P + hash(S)*G
@@ -129,10 +129,10 @@ pub fn recover_stealth_private_key(
 
     // Hash to derive scalar
     let mut hasher = Keccak256::new();
-    hasher.update(&shared_secret);
+    hasher.update(shared_secret);
     let hashed_secret = hasher.finalize();
 
-    let derived_scalar_opt: Option<Scalar> = Scalar::from_repr(hashed_secret.into()).into();
+    let derived_scalar_opt: Option<Scalar> = Scalar::from_repr(hashed_secret).into();
     let derived_scalar = derived_scalar_opt.ok_or("Hash output exceeded curve order")?;
 
     // Compute stealth private key: p_stealth = p + h

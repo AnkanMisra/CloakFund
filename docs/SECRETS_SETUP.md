@@ -14,7 +14,8 @@ Use the provided `.env.example` as a template.
 |---|---|---|
 | `BASE_RPC_URL` | Base network HTTP RPC endpoint. | Alchemy, Infura, or public Base endpoints. |
 | `BASE_WSS_URL` | Base network WebSocket RPC endpoint for the deposit watcher. | Alchemy, Infura, or public Base endpoints. |
-| `DATABASE_URL` | PostgreSQL connection string. | Local Postgres instance or managed DB. |
+| `CONVEX_URL` | Convex backend deployment URL. | Convex Dashboard (auto-generated via `npx convex dev`). |
+| `CONVEX_ADMIN_KEY` | (Optional) Convex admin key for authenticating backend mutations. | Convex Dashboard settings. |
 | `BITGO_API_KEY` | API key for the BitGo developer portal. | [BitGo Developer Portal](https://app.bitgo-test.com/) |
 | `FILEVERSE_API_KEY` | API key for storing encrypted receipts on Fileverse. | Fileverse Developer Dashboard |
 | `ETH_MAINNET_RPC_URL` | (Optional) Ethereum Mainnet RPC for ENS resolution. | Alchemy, Infura |

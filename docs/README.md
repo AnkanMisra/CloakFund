@@ -12,6 +12,12 @@ The frontend is built using Next.js with TypeScript (TSX), while the backend is 
 
 ---
 
+## Running Locally
+
+Please see [RUN_INSTRUCTIONS.md](RUN_INSTRUCTIONS.md) for how to set up and run the Convex layer, Rust backend, and the Next.js frontend using Bun.
+
+---
+
 ## Project Status
 
 ### Phase 0 — Preparation & Access
