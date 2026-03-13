@@ -1,14 +1,18 @@
 use anyhow::{Context, Result};
 use ethers::prelude::*;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info, warn};
+
+use tracing::{debug, error, info, trace, warn};
+
+/// How often to refresh the stealth address cache during historical catch-up
+const CACHE_REFRESH_INTERVAL: u64 = 50;
 
 use crate::config::WatcherConfig;
 use crate::convex_client::ConvexRepository;
-use crate::models::{AssetType, ConfirmationStatus, NewDeposit};
+use crate::models::{AssetType, ConfirmationStatus, DepositMatch, NewDeposit};
 
 /// The WatcherService is responsible for listening to the blockchain
 /// for incoming deposits to ephemeral addresses, and updating the state
@@ -50,30 +54,118 @@ impl WatcherService {
         let current_block = provider.get_block_number().await?.as_u64();
         let start_block = self.config.start_block.unwrap_or(current_block);
 
-        if start_block < current_block {
+        // Track the last block we've fully processed to avoid gaps and duplicates
+        let mut last_processed_block = if start_block < current_block {
             info!(
-                "Catching up on historical blocks from {} to {}",
-                start_block, current_block
+                "Catching up on historical blocks from {} to {} ({} blocks)",
+                start_block, current_block, current_block - start_block
             );
+
+            // During catch-up, cache stealth addresses and refresh periodically
+            let mut cached_watched: Option<HashMap<String, DepositMatch>> = None;
+            let mut cache_block: u64 = 0;
+
             for block_num in start_block..=current_block {
-                if let Err(e) = self.process_block(&provider, block_num).await {
-                    error!("Error processing historical block {}: {:?}", block_num, e);
+                // Refresh the cache every CACHE_REFRESH_INTERVAL blocks
+                if cached_watched.is_none()
+                    || block_num.saturating_sub(cache_block) >= CACHE_REFRESH_INTERVAL
+                {
+                    match self.fetch_watched_addresses().await {
+                        Ok(map) => {
+                            debug!(
+                                "Refreshed stealth address cache at block {} ({} addresses)",
+                                block_num,
+                                map.len()
+                            );
+                            cached_watched = Some(map);
+                            cache_block = block_num;
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to refresh stealth address cache at block {}: {:?}",
+                                block_num, e
+                            );
+                        }
+                    }
                 }
 
-                // Add rate limiting for historical catchup
-                sleep(Duration::from_millis(50)).await;
+                if let Some(ref watched) = cached_watched
+                    && let Err(e) = self
+                        .process_block_native_only(&provider, block_num, watched)
+                        .await
+                {
+                    error!("Error processing historical block {}: {:?}", block_num, e);
+                }
             }
             if let Err(e) = self.update_confirmations(&provider, current_block).await {
                 error!("Error updating confirmations after catch-up: {:?}", e);
             }
-            info!("Historical catch-up complete.");
-        }
+            info!("Historical catch-up complete at block {}", current_block);
+            current_block
+        } else {
+            start_block
+        };
 
+        // Subscribe FIRST, then close the gap between catch-up and subscription.
+        // This ensures zero blocks are ever missed.
         info!("Subscribing to new blocks...");
         let mut stream = provider.subscribe_blocks().await?;
+
+        // Process any blocks produced DURING catch-up
+        let new_head = provider.get_block_number().await?.as_u64();
+        if new_head > last_processed_block {
+            info!(
+                "Filling gap: processing blocks {} to {} ({} blocks produced during catch-up)",
+                last_processed_block + 1,
+                new_head,
+                new_head - last_processed_block
+            );
+            // Use native-only scanning for gap blocks (fast)
+            let gap_watched = self.fetch_watched_addresses().await.unwrap_or_default();
+            for block_num in (last_processed_block + 1)..=new_head {
+                if let Err(e) = self
+                    .process_block_native_only(&provider, block_num, &gap_watched)
+                    .await
+                {
+                    error!("Error processing gap block {}: {:?}", block_num, e);
+                }
+            }
+            last_processed_block = new_head;
+            info!("Gap fill complete. Now listening for live blocks.");
+        }
+
         while let Some(block) = stream.next().await {
             if let Some(number) = block.number {
                 let block_number = number.as_u64();
+
+                // Skip blocks already processed during catch-up / gap fill
+                if block_number <= last_processed_block {
+                    trace!(
+                        "Skipping already-processed block {} (last_processed={})",
+                        block_number,
+                        last_processed_block
+                    );
+                    continue;
+                }
+
+                // If the subscription jumped ahead, fill sequential gaps
+                if block_number > last_processed_block + 1 {
+                    info!(
+                        "Detected gap in subscription: blocks {} to {}",
+                        last_processed_block + 1,
+                        block_number - 1
+                    );
+                    let sub_gap_watched = self.fetch_watched_addresses().await.unwrap_or_default();
+                    for gap_block in (last_processed_block + 1)..block_number {
+                        if let Err(e) = self
+                            .process_block_native_only(&provider, gap_block, &sub_gap_watched)
+                            .await
+                        {
+                            error!("Error processing gap block {}: {:?}", gap_block, e);
+                        }
+                    }
+                }
+
                 debug!("New block received: {}", block_number);
 
                 if let Err(e) = self.process_block(&provider, block_number).await {
@@ -86,6 +178,8 @@ impl WatcherService {
                         block_number, e
                     );
                 }
+
+                last_processed_block = block_number;
 
                 let latest_confirmed =
                     block_number.saturating_sub(self.config.required_confirmations);
@@ -102,9 +196,106 @@ impl WatcherService {
         Ok(())
     }
 
-    /// Process a specific block to find deposits
+    /// Fetch all active stealth addresses from Convex and build a lowercase HashMap
+    /// for O(1) lookups. Called once per block to avoid per-transaction rate limiting.
+    async fn fetch_watched_addresses(&self) -> Result<HashMap<String, DepositMatch>> {
+        let active = self
+            .convex
+            .get_active_stealth_addresses(self.config.chain_id)
+            .await
+            .context("Failed to fetch active stealth addresses from Convex")?;
+
+        let mut map = HashMap::with_capacity(active.len());
+        for dm in active {
+            let key = dm.stealth_address.to_lowercase();
+            map.insert(key, dm);
+        }
+
+        debug!(
+            "Loaded {} active stealth addresses for chain {}",
+            map.len(),
+            self.config.chain_id
+        );
+
+        if map.is_empty() {
+            debug!("No active stealth addresses to watch — block will be skipped");
+        } else {
+            for addr in map.keys() {
+                trace!("  Watching: {}", addr);
+            }
+        }
+
+        Ok(map)
+    }
+
+    /// Check if a transaction was successful by verifying its receipt status.
+    /// Returns `true` if the receipt confirms status == 1 (success).
+    async fn is_tx_successful(&self, provider: &Provider<Ws>, tx_hash: H256) -> bool {
+        match provider.get_transaction_receipt(tx_hash).await {
+            Ok(Some(receipt)) => {
+                if let Some(status) = receipt.status {
+                    if status == U64::from(1) {
+                        true
+                    } else {
+                        warn!(
+                            "Transaction {:#x} reverted (status={}), skipping deposit",
+                            tx_hash, status
+                        );
+                        false
+                    }
+                } else {
+                    // Pre-Byzantium transactions don't have status; treat as successful
+                    warn!(
+                        "Transaction {:#x} has no receipt status field, assuming successful",
+                        tx_hash
+                    );
+                    true
+                }
+            }
+            Ok(None) => {
+                warn!(
+                    "No receipt found for transaction {:#x}, skipping deposit",
+                    tx_hash
+                );
+                false
+            }
+            Err(e) => {
+                error!(
+                    "Failed to fetch receipt for transaction {:#x}: {:?}",
+                    tx_hash, e
+                );
+                false
+            }
+        }
+    }
+
+    /// Process a specific block to find deposits (live mode — fetches addresses from Convex)
     async fn process_block(&self, provider: &Provider<Ws>, block_number: u64) -> Result<()> {
-        debug!("Processing block: {}", block_number);
+        let watched = match self.fetch_watched_addresses().await {
+            Ok(map) => map,
+            Err(e) => {
+                error!(
+                    "Failed to fetch watched addresses for block {}: {:?}. Skipping block.",
+                    block_number, e
+                );
+                return Ok(());
+            }
+        };
+        self.process_block_with_cache(provider, block_number, &watched)
+            .await
+    }
+
+    /// Fast native-only block scanner for historical catch-up.
+    /// Skips ERC20 log scanning entirely (~300-500ms savings per block).
+    async fn process_block_native_only(
+        &self,
+        provider: &Provider<Ws>,
+        block_number: u64,
+        watched: &HashMap<String, DepositMatch>,
+    ) -> Result<()> {
+        if watched.is_empty() {
+            return Ok(());
+        }
 
         let block = provider
             .get_block_with_txs(block_number)
@@ -113,109 +304,263 @@ impl WatcherService {
 
         let block_hash_opt = block.hash.map(|h| format!("{:#x}", h));
 
-        for tx in block.transactions {
+        for tx in &block.transactions {
             if let Some(to) = tx.to {
-                let to_hex = format!("{:#x}", to);
+                let to_hex = format!("{:#x}", to).to_lowercase();
 
-                // Query convex to see if it's a known ephemeral address
-                if let Ok(Some(match_res)) = self
-                    .convex
-                    .get_ephemeral_address_match(self.config.chain_id, &to_hex)
-                    .await
-                {
-                    let from_hex = format!("{:#x}", tx.from);
-                    let tx_hash_hex = format!("{:#x}", tx.hash);
-                    let value = tx.value.to_string(); // In wei
+                if let Some(match_res) = watched.get(&to_hex) {
+                    info!(
+                        "MATCH FOUND in block {}: tx {:#x} sends {} wei to stealth address {}",
+                        block_number, tx.hash, tx.value, to_hex
+                    );
 
-                    if tx.value > U256::zero() {
-                        let deposit = NewDeposit {
-                            paylink_id: match_res.paylink_id,
-                            ephemeral_address_id: match_res.ephemeral_address_id,
-                            tx_hash: tx_hash_hex,
-                            log_index: None,
-                            block_number,
-                            block_hash: block_hash_opt.clone(),
-                            from_address: from_hex,
-                            to_address: to_hex,
-                            asset_type: AssetType::Native,
-                            token_address: None,
-                            amount: value,
-                            decimals: Some(18),
-                            symbol: Some("ETH".to_string()),
-                            confirmations: 1,
-                            confirmation_status: ConfirmationStatus::from_confirmations(
-                                1,
-                                self.config.required_confirmations,
-                            ),
-                            detected_at: Some(
-                                SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_millis() as u64,
-                            ),
-                            confirmed_at: None,
-                        };
+                    if tx.value == U256::zero() {
+                        continue;
+                    }
 
-                        info!(
-                            "Detected native deposit of {} wei to {}",
-                            deposit.amount, deposit.to_address
-                        );
+                    if !self.is_tx_successful(provider, tx.hash).await {
+                        continue;
+                    }
 
-                        if let Err(e) = self.convex.upsert_deposit(&deposit).await {
-                            error!("Failed to upsert deposit to Convex: {:?}", e);
+                    let deposit = NewDeposit {
+                        paylink_id: match_res.paylink_id.clone(),
+                        ephemeral_address_id: match_res.ephemeral_address_id.clone(),
+                        tx_hash: format!("{:#x}", tx.hash),
+                        log_index: None,
+                        block_number,
+                        block_hash: block_hash_opt.clone(),
+                        from_address: format!("{:#x}", tx.from).to_lowercase(),
+                        to_address: to_hex.clone(),
+                        asset_type: AssetType::Native,
+                        token_address: None,
+                        amount: tx.value.to_string(),
+                        decimals: Some(18),
+                        symbol: Some("ETH".to_string()),
+                        confirmations: 1,
+                        confirmation_status: ConfirmationStatus::from_confirmations(
+                            1,
+                            self.config.required_confirmations,
+                        ),
+                        detected_at: Some(
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64,
+                        ),
+                        confirmed_at: None,
+                    };
+
+                    info!(
+                        "Recording native deposit: {} wei to {} (tx: {})",
+                        deposit.amount, deposit.to_address, deposit.tx_hash
+                    );
+
+                    match self.convex.upsert_deposit(&deposit).await {
+                        Ok(result) => {
+                            info!(
+                                "Successfully recorded deposit {} for paylink {}",
+                                result.deposit_id, result.paylink_id
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to upsert deposit to Convex for tx {}: {:?}",
+                                deposit.tx_hash, e
+                            );
                         }
                     }
                 }
             }
         }
 
-        // Check for ERC20 Transfers
+        Ok(())
+    }
+
+    /// Process a specific block using a pre-built address map (avoids redundant Convex queries)
+    async fn process_block_with_cache(
+        &self,
+        provider: &Provider<Ws>,
+        block_number: u64,
+        watched: &HashMap<String, DepositMatch>,
+    ) -> Result<()> {
+        debug!("Processing block: {}", block_number);
+
+        // If there is nothing to watch, skip the block entirely
+        if watched.is_empty() {
+            return Ok(());
+        }
+
+        // Step 2: Fetch the block with full transactions
+        let block = provider
+            .get_block_with_txs(block_number)
+            .await?
+            .context("Block not found")?;
+
+        let block_hash_opt = block.hash.map(|h| format!("{:#x}", h));
+        let tx_count = block.transactions.len();
+        debug!("Block {} contains {} transactions", block_number, tx_count);
+
+        // Step 3: Scan native ETH transfers
+        let mut native_matches: u64 = 0;
+        for tx in &block.transactions {
+            if let Some(to) = tx.to {
+                // Explicit lowercase normalization for address comparison
+                let to_hex = format!("{:#x}", to).to_lowercase();
+
+                trace!(
+                    "  tx {:#x}: to={} value={} wei",
+                    tx.hash,
+                    to_hex,
+                    tx.value
+                );
+
+                if let Some(match_res) = watched.get(&to_hex) {
+                    info!(
+                        "MATCH FOUND in block {}: tx {:#x} sends {} wei to stealth address {}",
+                        block_number, tx.hash, tx.value, to_hex
+                    );
+
+                    if tx.value == U256::zero() {
+                        debug!("Skipping zero-value transaction {:#x}", tx.hash);
+                        continue;
+                    }
+
+                    // Verify the transaction was actually successful on-chain
+                    if !self.is_tx_successful(provider, tx.hash).await {
+                        continue;
+                    }
+
+                    let from_hex = format!("{:#x}", tx.from).to_lowercase();
+                    let tx_hash_hex = format!("{:#x}", tx.hash);
+                    let value = tx.value.to_string(); // In wei
+
+                    let deposit = NewDeposit {
+                        paylink_id: match_res.paylink_id.clone(),
+                        ephemeral_address_id: match_res.ephemeral_address_id.clone(),
+                        tx_hash: tx_hash_hex.clone(),
+                        log_index: None,
+                        block_number,
+                        block_hash: block_hash_opt.clone(),
+                        from_address: from_hex,
+                        to_address: to_hex.clone(),
+                        asset_type: AssetType::Native,
+                        token_address: None,
+                        amount: value.clone(),
+                        decimals: Some(18),
+                        symbol: Some("ETH".to_string()),
+                        confirmations: 1,
+                        confirmation_status: ConfirmationStatus::from_confirmations(
+                            1,
+                            self.config.required_confirmations,
+                        ),
+                        detected_at: Some(
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64,
+                        ),
+                        confirmed_at: None,
+                    };
+
+                    info!(
+                        "Recording native deposit: {} wei to {} (tx: {})",
+                        deposit.amount, deposit.to_address, deposit.tx_hash
+                    );
+
+                    match self.convex.upsert_deposit(&deposit).await {
+                        Ok(result) => {
+                            info!(
+                                "Successfully recorded deposit {} for paylink {}",
+                                result.deposit_id, result.paylink_id
+                            );
+                            native_matches += 1;
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to upsert deposit to Convex for tx {}: {:?}",
+                                tx_hash_hex, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 4: Check for ERC20 Transfers
         let transfer_topic =
             H256::from_str("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
                 .unwrap();
 
         let block_hash = match block.hash {
             Some(h) => h,
-            None => return Ok(()),
+            None => {
+                if native_matches > 0 {
+                    info!(
+                        "Block {} processed: {} native deposit(s) found (no ERC20 scan — missing block hash)",
+                        block_number, native_matches
+                    );
+                }
+                return Ok(());
+            }
         };
 
-        let logs_filter = Filter::new().at_block_hash(block_hash);
-        if let Ok(logs) = provider.get_logs(&logs_filter).await {
-            for log in logs {
-                if log.topics.len() == 3 && log.topics[0] == transfer_topic {
-                    let from = Address::from(log.topics[1]);
-                    let to = Address::from(log.topics[2]);
-                    let to_hex = format!("{:#x}", to);
+        let mut erc20_matches: u64 = 0;
+        let logs_filter = Filter::new()
+            .at_block_hash(block_hash)
+            .topic0(transfer_topic);
+        match provider.get_logs(&logs_filter).await {
+            Ok(logs) => {
+                debug!("Block {} has {} event logs for ERC20 scan", block_number, logs.len());
 
-                    if let Ok(Some(match_res)) = self
-                        .convex
-                        .get_ephemeral_address_match(self.config.chain_id, &to_hex)
-                        .await
-                    {
-                        if log.data.len() < 32 {
-                            continue;
-                        }
-                        let value = U256::from_big_endian(&log.data[0..32]);
+                for log in logs {
+                    if log.topics.len() == 3 && log.topics[0] == transfer_topic {
+                        let to = Address::from(log.topics[2]);
+                        // Explicit lowercase normalization
+                        let to_hex = format!("{:#x}", to).to_lowercase();
 
-                        if value > U256::zero() {
-                            let tx_hash_hex = match log.transaction_hash {
-                                Some(h) => format!("{:#x}", h),
+                        if let Some(match_res) = watched.get(&to_hex) {
+                            if log.data.len() < 32 {
+                                warn!("ERC20 Transfer log to {} has insufficient data length ({}), skipping", to_hex, log.data.len());
+                                continue;
+                            }
+                            let value = U256::from_big_endian(&log.data[0..32]);
+
+                            if value == U256::zero() {
+                                debug!("Skipping zero-value ERC20 transfer to {}", to_hex);
+                                continue;
+                            }
+
+                            let tx_hash = match log.transaction_hash {
+                                Some(h) => h,
                                 None => {
                                     warn!("Skipping ERC20 Transfer log with no transaction hash");
                                     continue;
                                 }
                             };
-                            let token_address = format!("{:#x}", log.address);
+
+                            info!(
+                                "ERC20 MATCH in block {}: tx {:#x} transfers {} to stealth address {}",
+                                block_number, tx_hash, value, to_hex
+                            );
+
+                            // Verify the transaction was actually successful on-chain
+                            if !self.is_tx_successful(provider, tx_hash).await {
+                                continue;
+                            }
+
+                            let from = Address::from(log.topics[1]);
+                            let tx_hash_hex = format!("{:#x}", tx_hash);
+                            let token_address = format!("{:#x}", log.address).to_lowercase();
 
                             let deposit = NewDeposit {
-                                paylink_id: match_res.paylink_id,
-                                ephemeral_address_id: match_res.ephemeral_address_id,
-                                tx_hash: tx_hash_hex,
+                                paylink_id: match_res.paylink_id.clone(),
+                                ephemeral_address_id: match_res.ephemeral_address_id.clone(),
+                                tx_hash: tx_hash_hex.clone(),
                                 log_index: log.log_index.map(|i| i.as_u64()),
                                 block_number,
                                 block_hash: block_hash_opt.clone(),
-                                from_address: format!("{:#x}", from),
-                                to_address: to_hex,
+                                from_address: format!("{:#x}", from).to_lowercase(),
+                                to_address: to_hex.clone(),
                                 asset_type: AssetType::Erc20,
                                 token_address: Some(token_address.clone()),
                                 amount: value.to_string(),
@@ -236,17 +581,43 @@ impl WatcherService {
                             };
 
                             info!(
-                                "Detected ERC20 deposit of {} (token: {}) to {}",
-                                deposit.amount, token_address, deposit.to_address
+                                "Recording ERC20 deposit: {} (token: {}) to {} (tx: {})",
+                                deposit.amount, token_address, deposit.to_address, deposit.tx_hash
                             );
 
-                            if let Err(e) = self.convex.upsert_deposit(&deposit).await {
-                                error!("Failed to upsert deposit to Convex: {:?}", e);
+                            match self.convex.upsert_deposit(&deposit).await {
+                                Ok(result) => {
+                                    info!(
+                                        "Successfully recorded ERC20 deposit {} for paylink {}",
+                                        result.deposit_id, result.paylink_id
+                                    );
+                                    erc20_matches += 1;
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to upsert ERC20 deposit to Convex for tx {}: {:?}",
+                                        tx_hash_hex, e
+                                    );
+                                }
                             }
                         }
                     }
                 }
             }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch logs for block {} (hash {:#x}): {:?}",
+                    block_number, block_hash, e
+                );
+            }
+        }
+
+        let total = native_matches + erc20_matches;
+        if total > 0 {
+            info!(
+                "Block {} summary: {} deposit(s) found ({} native, {} ERC20) out of {} transactions",
+                block_number, total, native_matches, erc20_matches, tx_count
+            );
         }
 
         Ok(())

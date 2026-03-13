@@ -1,5 +1,7 @@
 pub mod api;
+pub mod bitgo_client;
 pub mod config;
+pub mod consolidator;
 pub mod convex_client;
 pub mod models;
 pub mod stealth;

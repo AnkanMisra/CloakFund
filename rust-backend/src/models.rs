@@ -149,9 +149,12 @@ pub struct DepositRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPaylink {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
     pub chain_id: u64,
     pub network: String,
@@ -160,9 +163,12 @@ pub struct NewPaylink {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPaylinkWithAddress {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
     pub chain_id: u64,
     pub network: String,
@@ -188,19 +194,26 @@ pub struct NewDeposit {
     pub paylink_id: String,
     pub ephemeral_address_id: String,
     pub tx_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log_index: Option<u64>,
     pub block_number: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub block_hash: Option<String>,
     pub from_address: String,
     pub to_address: String,
     pub asset_type: AssetType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_address: Option<String>,
     pub amount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     pub confirmations: u64,
     pub confirmation_status: ConfirmationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detected_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_at: Option<u64>,
 }
 
@@ -420,6 +433,11 @@ pub struct SweepJobRecord {
     pub deposit_id: String,
     pub status: String,
     pub sweep_tx_hash: Option<String>,
+    pub stealth_address: String,
+    pub ephemeral_pubkey_hex: String,
+    pub amount: String,
+    pub asset_type: String,
+    pub token_address: Option<String>,
 }
 
 impl DepositRecord {

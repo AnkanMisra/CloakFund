@@ -7,6 +7,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub watcher: WatcherConfig,
     pub convex: ConvexClientConfig,
+    pub sweeper: SweeperConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,14 @@ pub struct ConvexClientConfig {
     pub admin_key: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SweeperConfig {
+    pub treasury_address: String,
+    pub dry_run: bool,
+    pub bitgo_base_url: String,
+    pub bitgo_access_token: String,
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("missing required environment variable: {0}")]
@@ -49,6 +58,7 @@ impl AppConfig {
             server: ServerConfig::from_env()?,
             watcher: WatcherConfig::from_env()?,
             convex: ConvexClientConfig::from_env()?,
+            sweeper: SweeperConfig::from_env()?,
         })
     }
 }
@@ -94,6 +104,18 @@ impl ConvexClientConfig {
             deployment_url: required_env("CONVEX_URL")?,
             site_url: optional_env("CONVEX_SITE_URL"),
             admin_key: optional_env("CONVEX_ADMIN_KEY"),
+        })
+    }
+}
+
+impl SweeperConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            treasury_address: required_env("TREASURY_ADDRESS")?,
+            dry_run: parse_env_or_default("SWEEPER_DRY_RUN", false)?,
+            bitgo_base_url: env::var("BITGO_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:3080".to_string()),
+            bitgo_access_token: env::var("BITGO_ACCESS_TOKEN").unwrap_or_default(),
         })
     }
 }
@@ -167,6 +189,10 @@ mod tests {
             "CONVEX_URL",
             "CONVEX_SITE_URL",
             "CONVEX_ADMIN_KEY",
+            "TREASURY_ADDRESS",
+            "SWEEPER_DRY_RUN",
+            "BITGO_BASE_URL",
+            "BITGO_ACCESS_TOKEN",
         ] {
             unsafe { env::remove_var(key) };
         }
@@ -181,6 +207,10 @@ mod tests {
             env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
             env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
+            env::set_var(
+                "TREASURY_ADDRESS",
+                "0x0000000000000000000000000000000000000000",
+            );
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -195,6 +225,13 @@ mod tests {
         assert_eq!(config.convex.deployment_url, "https://example.convex.cloud");
         assert_eq!(config.convex.site_url, None);
         assert_eq!(config.convex.admin_key, None);
+        assert_eq!(
+            config.sweeper.treasury_address,
+            "0x0000000000000000000000000000000000000000"
+        );
+        assert_eq!(config.sweeper.dry_run, false);
+        assert_eq!(config.sweeper.bitgo_base_url, "http://localhost:3080");
+        assert_eq!(config.sweeper.bitgo_access_token, "");
     }
 
     #[test]
@@ -220,6 +257,10 @@ mod tests {
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
             env::set_var("CONVEX_SITE_URL", "https://example.convex.site");
             env::set_var("CONVEX_ADMIN_KEY", "test-admin-key");
+            env::set_var(
+                "TREASURY_ADDRESS",
+                "0x1234567890123456789012345678901234567890",
+            );
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -232,5 +273,9 @@ mod tests {
             Some("https://example.convex.site")
         );
         assert_eq!(config.convex.admin_key.as_deref(), Some("test-admin-key"));
+        assert_eq!(
+            config.sweeper.treasury_address,
+            "0x1234567890123456789012345678901234567890"
+        );
     }
 }

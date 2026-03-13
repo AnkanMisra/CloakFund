@@ -336,6 +336,33 @@ export const getEphemeralAddressMatch = query({
   },
 });
 
+export const getActiveStealthAddresses = query({
+  args: {
+    chainId: v.number(),
+  },
+  returns: v.array(
+    v.object({
+      paylinkId: v.id("paylinks"),
+      ephemeralAddressId: v.id("ephemeralAddresses"),
+      stealthAddress: v.string(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const addresses = await ctx.db
+      .query("ephemeralAddresses")
+      .withIndex("by_status", (q) => q.eq("status", "announced"))
+      .collect();
+
+    return addresses
+      .filter((a) => a.chainId === args.chainId)
+      .map((a) => ({
+        paylinkId: a.paylinkId,
+        ephemeralAddressId: a._id,
+        stealthAddress: a.stealthAddress,
+      }));
+  },
+});
+
 export const markEphemeralAddressFunded = mutation({
   args: {
     ephemeralAddressId: v.id("ephemeralAddresses"),

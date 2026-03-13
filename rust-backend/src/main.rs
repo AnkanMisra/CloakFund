@@ -1,4 +1,4 @@
-use rust_backend::{
+wuse rust_backend::{
     AppConfig, ConvexRepository, SweeperService, WatcherService, create_router, stealth,
 };
 use std::env;
@@ -8,6 +8,12 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
+    // Load environment variables from .env or .env.local files
+    let _ = dotenvy::dotenv();
+    let _ = dotenvy::from_filename(".env.local");
+    let _ = dotenvy::from_filename("../.env.local");
+    let _ = dotenvy::from_filename("../.env");
+
     tracing_subscriber::fmt::init();
 
     let args: Vec<String> = env::args().collect();
@@ -61,13 +67,21 @@ async fn run_server() -> anyhow::Result<()> {
     info!("Initializing Convex client...");
     let convex = Arc::new(ConvexRepository::new(&config.convex).await?);
 
-    info!("Fetching last watcher checkpoint...");
-    if let Ok(Some(checkpoint)) = convex.get_latest_checkpoint().await {
-        let resume_block = checkpoint
-            .latest_processed_block
-            .unwrap_or(checkpoint.start_block);
-        config.watcher.start_block = Some(resume_block);
-        info!("Resuming watcher from block {}", resume_block);
+    // WATCHER_START_BLOCK env var takes priority; only fall back to checkpoint
+    if config.watcher.start_block.is_some() {
+        info!(
+            "WATCHER_START_BLOCK override: starting from block {}",
+            config.watcher.start_block.unwrap()
+        );
+    } else {
+        info!("Fetching last watcher checkpoint...");
+        if let Ok(Some(checkpoint)) = convex.get_latest_checkpoint().await {
+            let resume_block = checkpoint
+                .latest_processed_block
+                .unwrap_or(checkpoint.start_block);
+            config.watcher.start_block = Some(resume_block);
+            info!("Resuming watcher from block {}", resume_block);
+        }
     }
 
     info!("Starting watcher service...");

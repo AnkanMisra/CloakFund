@@ -29,6 +29,8 @@ pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
         .route("/health", get(health_check))
         .route("/api/v1/paylink", post(create_paylink))
         .route("/api/v1/paylink/:id", get(get_paylink))
+        .route("/api/v1/consolidate", post(consolidate_funds))
+        .route("/api/v1/bitgo/webhook", post(bitgo_webhook))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state))
@@ -115,6 +117,46 @@ async fn get_paylink(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ConsolidateRequest {
+    deposit_id: String,
+}
+
+async fn consolidate_funds(
+    State(state): State<Arc<ConvexRepository>>,
+    Json(payload): Json<ConsolidateRequest>,
+) -> impl IntoResponse {
+    match state.create_sweep_job(&payload.deposit_id).await {
+        Ok(job_id) => (
+            axum::http::StatusCode::ACCEPTED,
+            Json(json!({ "status": "queued", "job_id": job_id })),
+        )
+            .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to create sweep job: {}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+async fn bitgo_webhook(
+    State(_state): State<Arc<ConvexRepository>>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    tracing::info!("Received BitGo webhook: {:?}", payload);
+
+    // In a complete implementation, we'd parse the BitGo webhook payload
+    // and trigger updates in Convex (e.g., mark the sweep job as completed
+    // if BitGo confirms receipt in the treasury wallet).
+
+    (
+        axum::http::StatusCode::OK,
+        Json(json!({ "status": "acknowledged" })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +170,14 @@ mod tests {
         // Can't easily test create_paylink and get_paylink here without mocking ConvexRepository,
         // which requires a live Convex backend or an extracted trait.
         // Full API endpoint testing should happen in integration tests.
+    }
+
+    #[tokio::test]
+    async fn test_bitgo_webhook_response() {
+        // Since bitgo_webhook takes an Arc<ConvexRepository> state we can mock it here
+        // or since it doesn't currently use the state we could pass a dummy.
+        // However, it's easier to test the router indirectly in integration tests or
+        // modify the signature.
+        // This is a placeholder test to ensure it compiles.
     }
 }

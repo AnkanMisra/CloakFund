@@ -11,6 +11,8 @@
 import type * as deposits from "../deposits.js";
 import type * as http from "../http.js";
 import type * as paylinks from "../paylinks.js";
+import type * as sweeps from "../sweeps.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -22,6 +24,8 @@ declare const fullApi: ApiFromModules<{
   deposits: typeof deposits;
   http: typeof http;
   paylinks: typeof paylinks;
+  sweeps: typeof sweeps;
+  users: typeof users;
 }>;
 
 /**
