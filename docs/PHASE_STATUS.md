@@ -11,8 +11,8 @@ This document tracks the implementation progress of CloakFund across all phases 
 - **Notes**: Initialized `rust-backend` crate. Implemented ECDH stealth address generation and recipient-side stealth private key recovery using `k256` and `sha3` in `stealth.rs`. Added roundtrip and negative unit tests, verified deterministic outputs, added CLI usage, checksum address formatting, and documented the finalized implementation in `CRYPTOGRAPHY.md`, `RUST_BACKEND_DESIGN.md`, and `CRYPTO_TEST_VECTORS.md`. Phase 1 was re-reviewed and verified complete before proceeding.
 
 ## Phase 2: Deposit Watcher / Indexer
-- **Status**: `not_started`
-- **Notes**: Will implement ethers-rs WebSocket subscription to Base WSS, Postgres DB schema (paylinks, ephemeral_addresses, deposits), and idempotent event parsing.
+- **Status**: `in_progress`
+- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented. Rust backend `models` and `config` are prepared for Convex integration. Remaining work: implement `convex_client`, `watcher` logic with `ethers-rs` to subscribe to Base WSS, and integration tests.
 
 ## Phase 3: Paylink API & Persistence
 - **Status**: `not_started`

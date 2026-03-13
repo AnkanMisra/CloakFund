@@ -65,4 +65,31 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 
 ---
 
+## Phase 2: Deposit Watcher / Indexer (In Progress)
+
+### What was done (Convex Pivot)
+- Pivoted the persistence layer from Postgres/SQLx to Convex for faster hackathon iteration.
+- Scaffolded the Convex backend project in the `convex/` directory.
+- Defined the Convex schema with tables for `paylinks`, `ephemeralAddresses`, and `deposits`.
+- Implemented Convex server functions for paylink creation, stealth address persistence, and deposit status updates (`paylinks.ts`, `deposits.ts`).
+- Exposed a minimal Convex HTTP API (`http.ts`) for health and deposit-status checks.
+- Updated the Rust backend `config.rs` to support Convex deployment variables.
+- Created comprehensive Rust data structures in `models.rs` corresponding to the Convex backend types.
+
+### How it was done
+- **Convex Schema:** Designed indexes around `chainId`, `status`, and `txHash` to efficiently query pending/confirmed deposits.
+- **Rust Types:** Built `DepositRecord`, `PaylinkRecord`, and status enums (`ConfirmationStatus`, `EphemeralAddressStatus`) with strict `serde` serialization to interface seamlessly with Convex HTTP actions.
+
+### Why it was done
+- **Speed & Simplicity:** Convex provides a managed real-time database with built-in server functions, significantly reducing boilerplate compared to setting up Postgres migrations and local DB containers.
+- **Separation of Concerns:** Rust handles the heavy lifting of blockchain watching and cryptography, while Convex serves as the high-availability data and API layer for the frontend.
+
+### Remaining Work for Phase 2
+- Implement the `convex_client.rs` bridge in Rust to interact with Convex functions via HTTP.
+- Implement `watcher.rs` using `ethers-rs` WebSocket subscriptions to listen to the Base network for native and token transfers.
+- Connect the watcher pipeline: Detect deposit -> Resolve stealth mapping -> Call `upsertDeposit` on Convex.
+- Add comprehensive watcher integration tests.
+
+---
+
 *(This log will be continuously updated as subsequent phases are completed.)*
