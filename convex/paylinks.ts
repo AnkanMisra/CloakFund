@@ -98,6 +98,11 @@ export const createEphemeralAddress = mutation({
       .unique();
 
     if (existing) {
+      if (existing.paylinkId !== args.paylinkId) {
+        throw new Error(
+          "Stealth address already registered to a different paylink on this chain",
+        );
+      }
       return {
         ephemeralAddressId: existing._id,
         paylinkId: existing.paylinkId,
@@ -239,7 +244,9 @@ export const getEphemeralAddressMatch = query({
     const match = await ctx.db
       .query("ephemeralAddresses")
       .withIndex("by_chain_and_address", (q) =>
-        q.eq("chainId", args.chainId).eq("stealthAddress", normalizedStealthAddress),
+        q
+          .eq("chainId", args.chainId)
+          .eq("stealthAddress", normalizedStealthAddress),
       )
       .unique();
 

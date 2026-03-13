@@ -1,13 +1,11 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 const http = httpRouter();
 
-function json(
-  body: unknown,
-  init?: ResponseInit,
-): Response {
+function json(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
     status: init?.status ?? 200,
     headers: {
@@ -48,7 +46,7 @@ http.route({
 
     try {
       const result = await ctx.runQuery(api.deposits.getDepositStatus, {
-        paylinkId: paylinkId as any,
+        paylinkId: paylinkId as Id<"paylinks">,
       });
 
       return json({
@@ -56,8 +54,7 @@ http.route({
         data: result,
       });
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown error";
+      const message = error instanceof Error ? error.message : "Unknown error";
 
       return json(
         {

@@ -12,7 +12,7 @@ This document tracks the implementation progress of CloakFund across all phases 
 
 ## Phase 2: Deposit Watcher / Indexer
 - **Status**: `in_progress`
-- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented. Rust backend `models` and `config` are prepared for Convex integration. Remaining work: implement `convex_client`, `watcher` logic with `ethers-rs` to subscribe to Base WSS, and integration tests.
+- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented. Rust backend `models`, `config`, `convex_client`, and `watcher` (via `ethers-rs`) are implemented to subscribe to Base WSS and sync with Convex. Remaining work: SSE/WebSocket push for frontend, demonstration script, and integration tests.
 
 ## Phase 3: Paylink API & Persistence
 - **Status**: `not_started`

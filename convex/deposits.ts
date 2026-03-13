@@ -89,6 +89,12 @@ export const upsertDeposit = mutation({
       throw new Error("Ephemeral address not found");
     }
 
+    if (ephemeralAddress.paylinkId !== args.paylinkId) {
+      throw new Error(
+        "Ephemeral address does not belong to the specified paylink",
+      );
+    }
+
     const normalizedTxHash = normalizeHex(args.txHash);
     const normalizedFromAddress = normalizeAddress(args.fromAddress);
     const normalizedToAddress = normalizeAddress(args.toAddress);
@@ -394,12 +400,16 @@ export const getPendingConfirmationUpdates = query({
   handler: async (ctx) => {
     const pending = await ctx.db
       .query("deposits")
-      .withIndex("by_confirmation_status", (q) => q.eq("confirmationStatus", "pending"))
+      .withIndex("by_confirmation_status", (q) =>
+        q.eq("confirmationStatus", "pending"),
+      )
       .collect();
 
     const confirmed = await ctx.db
       .query("deposits")
-      .withIndex("by_confirmation_status", (q) => q.eq("confirmationStatus", "confirmed"))
+      .withIndex("by_confirmation_status", (q) =>
+        q.eq("confirmationStatus", "confirmed"),
+      )
       .collect();
 
     return [...pending, ...confirmed];
@@ -449,7 +459,12 @@ export const getDepositStatus = query({
     let nativeTotal = 0n;
     const tokenTotals = new Map<
       string,
-      { tokenAddress: string; symbol?: string; decimals?: number; totalAmount: bigint }
+      {
+        tokenAddress: string;
+        symbol?: string;
+        decimals?: number;
+        totalAmount: bigint;
+      }
     >();
 
     for (const deposit of deposits) {
@@ -498,12 +513,14 @@ export const getDepositStatus = query({
         confirmedAt: deposit.confirmedAt,
       })),
       totalConfirmedNativeAmount: nativeTotal.toString(),
-      totalConfirmedTokenAmounts: Array.from(tokenTotals.values()).map((item) => ({
-        tokenAddress: item.tokenAddress,
-        symbol: item.symbol,
-        decimals: item.decimals,
-        totalAmount: item.totalAmount.toString(),
-      })),
+      totalConfirmedTokenAmounts: Array.from(tokenTotals.values()).map(
+        (item) => ({
+          tokenAddress: item.tokenAddress,
+          symbol: item.symbol,
+          decimals: item.decimals,
+          totalAmount: item.totalAmount.toString(),
+        }),
+      ),
     };
   },
 });

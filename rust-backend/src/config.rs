@@ -26,6 +26,7 @@ pub struct WatcherConfig {
     pub start_block: Option<u64>,
 }
 
+/// Configuration for the Convex client
 #[derive(Debug, Clone)]
 pub struct ConvexClientConfig {
     pub deployment_url: String,
@@ -167,7 +168,7 @@ mod tests {
             "CONVEX_SITE_URL",
             "CONVEX_ADMIN_KEY",
         ] {
-            env::remove_var(key);
+            unsafe { env::remove_var(key) };
         }
     }
 
@@ -176,9 +177,11 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         clear_env();
 
-        env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
-        env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
-        env::set_var("CONVEX_URL", "https://example.convex.cloud");
+        unsafe {
+            env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
+            env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
+            env::set_var("CONVEX_URL", "https://example.convex.cloud");
+        }
 
         let config = AppConfig::from_env().unwrap();
 
@@ -208,14 +211,16 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         clear_env();
 
-        env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
-        env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
-        env::set_var("WATCHER_START_BLOCK", "12345");
-        env::set_var("REQUIRED_CONFIRMATIONS", "12");
-        env::set_var("WATCHER_POLL_INTERVAL_SECS", "30");
-        env::set_var("CONVEX_URL", "https://example.convex.cloud");
-        env::set_var("CONVEX_SITE_URL", "https://example.convex.site");
-        env::set_var("CONVEX_ADMIN_KEY", "test-admin-key");
+        unsafe {
+            env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
+            env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
+            env::set_var("WATCHER_START_BLOCK", "12345");
+            env::set_var("REQUIRED_CONFIRMATIONS", "12");
+            env::set_var("WATCHER_POLL_INTERVAL_SECS", "30");
+            env::set_var("CONVEX_URL", "https://example.convex.cloud");
+            env::set_var("CONVEX_SITE_URL", "https://example.convex.site");
+            env::set_var("CONVEX_ADMIN_KEY", "test-admin-key");
+        }
 
         let config = AppConfig::from_env().unwrap();
 

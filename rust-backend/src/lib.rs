@@ -6,6 +6,6 @@ pub mod stealth;
 pub mod watcher;
 
 pub use api::create_router;
-pub use config::AppConfig;
-pub use convex_client::{ConvexClientConfig, ConvexRepository};
+pub use config::{AppConfig, ConvexClientConfig};
+pub use convex_client::ConvexRepository;
 pub use watcher::WatcherService;
