@@ -89,8 +89,11 @@ impl ConfirmationStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaylinkRecord {
+    #[serde(rename = "_id")]
     pub id: String,
+    #[serde(rename = "_creationTime")]
     pub creation_time: u64,
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
@@ -101,8 +104,11 @@ pub struct PaylinkRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EphemeralAddressRecord {
+    #[serde(rename = "_id")]
     pub id: String,
+    #[serde(rename = "_creationTime")]
     pub creation_time: u64,
     pub paylink_id: String,
     pub stealth_address: String,
@@ -114,8 +120,11 @@ pub struct EphemeralAddressRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DepositRecord {
+    #[serde(rename = "_id")]
     pub id: String,
+    #[serde(rename = "_creationTime")]
     pub creation_time: u64,
     pub paylink_id: String,
     pub ephemeral_address_id: String,
@@ -137,6 +146,7 @@ pub struct DepositRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewPaylink {
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
@@ -146,6 +156,7 @@ pub struct NewPaylink {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewEphemeralAddress {
     pub paylink_id: String,
     pub stealth_address: String,
@@ -156,6 +167,7 @@ pub struct NewEphemeralAddress {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NewDeposit {
     pub paylink_id: String,
     pub ephemeral_address_id: String,
@@ -177,6 +189,7 @@ pub struct NewDeposit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DepositMatch {
     pub paylink_id: String,
     pub ephemeral_address_id: String,
@@ -184,6 +197,7 @@ pub struct DepositMatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DepositView {
     pub deposit_id: String,
     pub tx_hash: String,
@@ -202,6 +216,7 @@ pub struct DepositView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TokenAmountSummary {
     pub token_address: String,
     pub symbol: Option<String>,
@@ -210,6 +225,7 @@ pub struct TokenAmountSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DepositStatusResponse {
     pub paylink_id: String,
     pub deposits: Vec<DepositView>,
@@ -218,6 +234,7 @@ pub struct DepositStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WatcherCheckpoint {
     pub start_block: u64,
     pub latest_processed_block: Option<u64>,
@@ -225,6 +242,7 @@ pub struct WatcherCheckpoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WatcherDepositEvent {
     pub tx_hash: String,
     pub log_index: Option<u64>,
@@ -240,6 +258,7 @@ pub struct WatcherDepositEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConvexFunctionRequest<T> {
     pub path: String,
     pub args: T,
@@ -247,6 +266,7 @@ pub struct ConvexFunctionRequest<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConvexFunctionSuccess<T> {
     pub status: String,
     pub value: T,
@@ -255,6 +275,7 @@ pub struct ConvexFunctionSuccess<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConvexFunctionError {
     pub status: String,
     pub error_message: Option<String>,
@@ -271,6 +292,7 @@ pub enum ConvexFunctionResponse<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpsertDepositResult {
     pub deposit_id: String,
     pub paylink_id: String,
@@ -293,6 +315,7 @@ pub struct UpsertDepositResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfirmationUpdateResult {
     pub deposit_id: String,
     pub confirmations: u64,
@@ -301,6 +324,7 @@ pub struct ConfirmationUpdateResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub ok: bool,
     pub service: String,
@@ -308,6 +332,7 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiErrorResponse {
     pub ok: bool,
     pub error: String,
@@ -315,12 +340,14 @@ pub struct ApiErrorResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DepositStatusApiResponse {
     pub ok: bool,
     pub data: DepositStatusResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaylinkIdParam {
     pub paylink_id: String,
 }

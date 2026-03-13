@@ -23,9 +23,13 @@ pub struct ConvexRepository {
 impl ConvexRepository {
     /// Initializes a new Convex client using the provided configuration.
     pub async fn new(config: &ConvexClientConfig) -> Result<Self> {
-        let client = ConvexClient::new(&config.deployment_url)
+        let mut client = ConvexClient::new(&config.deployment_url)
             .await
             .context("Failed to initialize Convex client")?;
+
+        if let Some(admin_key) = &config.admin_key {
+            client.set_admin_auth(admin_key.clone(), None).await;
+        }
 
         Ok(Self {
             client: Arc::new(Mutex::new(client)),

@@ -152,7 +152,12 @@ impl WatcherService {
             H256::from_str("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
                 .unwrap();
 
-        let logs_filter = Filter::new().at_block_hash(block.hash.unwrap_or_default());
+        let block_hash = match block.hash {
+            Some(h) => h,
+            None => return Ok(()),
+        };
+
+        let logs_filter = Filter::new().at_block_hash(block_hash);
         if let Ok(logs) = provider.get_logs(&logs_filter).await {
             for log in logs {
                 if log.topics.len() == 3 && log.topics[0] == transfer_topic {
@@ -165,12 +170,10 @@ impl WatcherService {
                         .get_ephemeral_address_match(self.config.chain_id, &to_hex)
                         .await
                     {
-                        let data = if log.data.len() >= 32 {
-                            &log.data[0..32]
-                        } else {
-                            &log.data
-                        };
-                        let value = U256::from_big_endian(data);
+                        if log.data.len() < 32 {
+                            continue;
+                        }
+                        let value = U256::from_big_endian(&log.data[0..32]);
 
                         if value > U256::zero() {
                             let tx_hash_hex = log
@@ -249,6 +252,8 @@ impl WatcherService {
                             "Transaction {} reorged to block {}",
                             deposit.tx_hash, tx_block
                         );
+                        let _ = self.convex.mark_deposit_reorged(&deposit.id).await;
+                        continue;
                     }
                 } else {
                     warn!("Transaction {} reorged out of chain", deposit.tx_hash);

@@ -530,9 +530,9 @@ export const getLatestCheckpoint = query({
   returns: v.union(
     v.null(),
     v.object({
-      start_block: v.number(),
-      latest_processed_block: v.optional(v.number()),
-      latest_confirmed_block: v.optional(v.number()),
+      startBlock: v.number(),
+      latestProcessedBlock: v.optional(v.number()),
+      latestConfirmedBlock: v.optional(v.number()),
     }),
   ),
   handler: async (ctx) => {
@@ -547,9 +547,9 @@ export const getLatestCheckpoint = query({
     }
 
     return {
-      start_block: latestDeposit.blockNumber,
-      latest_processed_block: latestDeposit.blockNumber,
-      latest_confirmed_block: latestDeposit.blockNumber,
+      startBlock: latestDeposit.blockNumber,
+      latestProcessedBlock: latestDeposit.blockNumber,
+      latestConfirmedBlock: latestDeposit.blockNumber,
     };
   },
 });
