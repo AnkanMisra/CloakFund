@@ -6,9 +6,15 @@ Generates stealth payment address.
 
 ---
 
-GET /deposit-status
+GET /deposit-status?paylinkId=<id>
 
-Returns payment confirmation.
+Returns payment confirmation, detected deposits, and aggregated balances. (Served via Convex HTTP action)
+
+---
+
+GET /health
+
+Returns Convex backend health status and timestamp. (Served via Convex HTTP action)
 
 ---
 

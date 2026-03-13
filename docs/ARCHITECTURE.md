@@ -1,9 +1,10 @@
 # Architecture
 
-CloakFund consists of five major layers.
+CloakFund consists of several major layers.
 
 Frontend  
-Backend  
+Backend (Rust)  
+Data Layer (Convex)  
 Blockchain  
 Treasury  
 Encrypted Storage
@@ -18,7 +19,7 @@ Next.js Frontend
 ↓  
 Rust Backend API  
 ↓  
-Stealth Address Generator  
+Stealth Address Generator & Convex Data Layer  
 ↓  
 Base Blockchain  
 ↓  
@@ -42,14 +43,15 @@ receipt decryption
 
 ---
 
-## Backend
+## Backend & Data Layer
 
-Implemented in Rust.
+Implemented in Rust and Convex.
 
 Responsibilities:
 
-stealth address generation  
-blockchain deposit watcher  
-treasury consolidation  
-receipt encryption  
+stealth address generation (Rust)  
+blockchain deposit watcher (Rust)  
+real-time data persistence and APIs (Convex)  
+treasury consolidation (Rust)  
+receipt encryption (Rust)  
 external integrations

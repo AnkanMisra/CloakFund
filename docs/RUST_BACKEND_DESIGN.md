@@ -22,7 +22,11 @@ Uses ECDH cryptography to derive one-time addresses.
 
 Watcher Service
 
-Listens for blockchain events using ethers-rs.
+Listens for blockchain events using ethers-rs and syncs deposits to the Convex backend.
+
+Convex Client
+
+Acts as the bridge between the Rust backend and the Convex real-time database.
 
 Treasury Engine
 
@@ -34,11 +38,15 @@ Encrypts receipts before storage.
 
 ---
 
-## CLI Usage (Stealth Module)
+## CLI Usage
 
-The Rust backend currently includes a small CLI for generating stealth payment data (sender side) and recovering the stealth private key (recipient side).
+The Rust backend includes a CLI for running the application and interacting with the stealth module.
 
-Generate stealth payment data (address + ephemeral pubkey + view tag):
+**Start the API server and blockchain watcher:**
+
+- `cargo run --manifest-path rust-backend/Cargo.toml -- serve`
+
+**Generate stealth payment data** (address + ephemeral pubkey + view tag):
 
 - `cargo run --manifest-path rust-backend/Cargo.toml -- generate <recipient_pubkey_hex>`
 
@@ -56,4 +64,4 @@ Notes:
 
 Tokio is used to manage concurrent services.
 
-Watcher and API run as separate async tasks.
+Watcher and API run as separate async tasks, both utilizing a shared Convex client for state persistence.
