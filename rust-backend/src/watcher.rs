@@ -58,7 +58,9 @@ impl WatcherService {
         let mut last_processed_block = if start_block < current_block {
             info!(
                 "Catching up on historical blocks from {} to {} ({} blocks)",
-                start_block, current_block, current_block - start_block
+                start_block,
+                current_block,
+                current_block - start_block
             );
 
             // During catch-up, cache stealth addresses and refresh periodically
@@ -142,8 +144,7 @@ impl WatcherService {
                 if block_number <= last_processed_block {
                     trace!(
                         "Skipping already-processed block {} (last_processed={})",
-                        block_number,
-                        last_processed_block
+                        block_number, last_processed_block
                     );
                     continue;
                 }
@@ -407,12 +408,7 @@ impl WatcherService {
                 // Explicit lowercase normalization for address comparison
                 let to_hex = format!("{:#x}", to).to_lowercase();
 
-                trace!(
-                    "  tx {:#x}: to={} value={} wei",
-                    tx.hash,
-                    to_hex,
-                    tx.value
-                );
+                trace!("  tx {:#x}: to={} value={} wei", tx.hash, to_hex, tx.value);
 
                 if let Some(match_res) = watched.get(&to_hex) {
                     info!(
@@ -510,7 +506,11 @@ impl WatcherService {
             .topic0(transfer_topic);
         match provider.get_logs(&logs_filter).await {
             Ok(logs) => {
-                debug!("Block {} has {} event logs for ERC20 scan", block_number, logs.len());
+                debug!(
+                    "Block {} has {} event logs for ERC20 scan",
+                    block_number,
+                    logs.len()
+                );
 
                 for log in logs {
                     if log.topics.len() == 3 && log.topics[0] == transfer_topic {
@@ -520,7 +520,11 @@ impl WatcherService {
 
                         if let Some(match_res) = watched.get(&to_hex) {
                             if log.data.len() < 32 {
-                                warn!("ERC20 Transfer log to {} has insufficient data length ({}), skipping", to_hex, log.data.len());
+                                warn!(
+                                    "ERC20 Transfer log to {} has insufficient data length ({}), skipping",
+                                    to_hex,
+                                    log.data.len()
+                                );
                                 continue;
                             }
                             let value = U256::from_big_endian(&log.data[0..32]);

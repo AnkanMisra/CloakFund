@@ -185,10 +185,7 @@ impl ConvexRepository {
 
     /// Fetches all active (announced) stealth addresses for a given chain in a single query.
     /// Used by the watcher to build an in-memory lookup set instead of querying per-transaction.
-    pub async fn get_active_stealth_addresses(
-        &self,
-        chain_id: u64,
-    ) -> Result<Vec<DepositMatch>> {
+    pub async fn get_active_stealth_addresses(&self, chain_id: u64) -> Result<Vec<DepositMatch>> {
         let mut args = std::collections::BTreeMap::new();
         args.insert(
             "chainId".to_string(),
