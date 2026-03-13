@@ -38,14 +38,26 @@ impl WatcherService {
 
         info!("Successfully connected to Base WSS provider");
 
-        // TODO: Phase 2 implementation details:
-        // 1. Fetch current watcher checkpoint (start block) from Convex/DB.
-        // 2. Subscribe to new blocks via ethers-rs `subscribe_blocks`.
-        // 3. For each block, scan for native ETH transfers and ERC20 Transfer events.
-        // 4. Query Convex for matching ephemeral addresses (`getEphemeralAddressMatch`).
-        // 5. Submit valid deposits to Convex (`upsertDeposit`).
-        // 6. Periodically check pending deposits and update confirmation counts.
+        let current_block = provider.get_block_number().await?.as_u64();
+        let start_block = self.config.start_block.unwrap_or(current_block);
 
+        if start_block < current_block {
+            info!(
+                "Catching up on historical blocks from {} to {}",
+                start_block, current_block
+            );
+            for block_num in start_block..=current_block {
+                if let Err(e) = self.process_block(&provider, block_num).await {
+                    error!("Error processing historical block {}: {:?}", block_num, e);
+                }
+            }
+            if let Err(e) = self.update_confirmations(&provider, current_block).await {
+                error!("Error updating confirmations after catch-up: {:?}", e);
+            }
+            info!("Historical catch-up complete.");
+        }
+
+        info!("Subscribing to new blocks...");
         let mut stream = provider.subscribe_blocks().await?;
         while let Some(block) = stream.next().await {
             if let Some(number) = block.number {

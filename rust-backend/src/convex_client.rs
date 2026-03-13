@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use crate::config::ConvexClientConfig;
 use crate::models::{
     ConfirmationUpdateResult, DepositMatch, DepositRecord, DepositStatusResponse, NewDeposit,
-    UpsertDepositResult,
+    UpsertDepositResult, WatcherCheckpoint,
 };
 
 /// A repository interface for interacting with the Convex backend functions.
@@ -169,6 +169,30 @@ impl ConvexRepository {
             convex::FunctionResult::Value(val) => {
                 let res: Vec<DepositRecord> = serde_json::from_value(convex_to_json(val))?;
                 Ok(res)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Fetches the latest processed block checkpoint for the watcher.
+    pub async fn get_latest_checkpoint(&self) -> Result<Option<WatcherCheckpoint>> {
+        let args = std::collections::BTreeMap::new();
+
+        let mut client = self.client.lock().await;
+        let result = client.query("deposits:getLatestCheckpoint", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let json = convex_to_json(val);
+                if json.is_null() {
+                    Ok(None)
+                } else {
+                    let res: WatcherCheckpoint = serde_json::from_value(json)?;
+                    Ok(Some(res))
+                }
             }
             convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
             convex::FunctionResult::ConvexError(err) => {

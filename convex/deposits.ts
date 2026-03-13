@@ -524,3 +524,32 @@ export const getDepositStatus = query({
     };
   },
 });
+
+export const getLatestCheckpoint = query({
+  args: {},
+  returns: v.union(
+    v.null(),
+    v.object({
+      start_block: v.number(),
+      latest_processed_block: v.optional(v.number()),
+      latest_confirmed_block: v.optional(v.number()),
+    }),
+  ),
+  handler: async (ctx) => {
+    const latestDeposit = await ctx.db
+      .query("deposits")
+      .withIndex("by_block_number")
+      .order("desc")
+      .first();
+
+    if (!latestDeposit) {
+      return null;
+    }
+
+    return {
+      start_block: latestDeposit.blockNumber,
+      latest_processed_block: latestDeposit.blockNumber,
+      latest_confirmed_block: latestDeposit.blockNumber,
+    };
+  },
+});

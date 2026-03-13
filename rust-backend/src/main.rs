@@ -1,4 +1,4 @@
-use rust_backend::{create_router, stealth, AppConfig, ConvexRepository, WatcherService};
+use rust_backend::{AppConfig, ConvexRepository, WatcherService, create_router, stealth};
 use std::env;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -31,13 +31,14 @@ async fn main() {
                 return;
             }
             match stealth::generate_stealth_address(&args[2]) {
-            Ok((addr, ephem, tag)) => {
-                println!("Stealth Address: {}", addr);
-                println!("Ephemeral Pubkey: {}", ephem);
-                println!("View Tag: 0x{:02x}", tag);
+                Ok((addr, ephem, tag)) => {
+                    println!("Stealth Address: {}", addr);
+                    println!("Ephemeral Pubkey: {}", ephem);
+                    println!("View Tag: 0x{:02x}", tag);
+                }
+                Err(e) => eprintln!("Error: {}", e),
             }
-            Err(e) => eprintln!("Error: {}", e),
-        },
+        }
         "recover" => {
             if args.len() < 4 {
                 eprintln!("Missing arguments for recover");
@@ -53,10 +54,19 @@ async fn main() {
 }
 
 async fn run_server() -> anyhow::Result<()> {
-    let config = AppConfig::from_env()?;
+    let mut config = AppConfig::from_env()?;
 
     info!("Initializing Convex client...");
     let convex = Arc::new(ConvexRepository::new(&config.convex).await?);
+
+    info!("Fetching last watcher checkpoint...");
+    if let Ok(Some(checkpoint)) = convex.get_latest_checkpoint().await {
+        let resume_block = checkpoint
+            .latest_processed_block
+            .unwrap_or(checkpoint.start_block);
+        config.watcher.start_block = Some(resume_block);
+        info!("Resuming watcher from block {}", resume_block);
+    }
 
     info!("Starting watcher service...");
     let watcher = WatcherService::new(config.watcher.clone(), convex.clone());
