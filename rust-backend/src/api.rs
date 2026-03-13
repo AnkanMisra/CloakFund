@@ -123,3 +123,19 @@ async fn get_paylink(
             .into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let response = health_check().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Can't easily test create_paylink and get_paylink here without mocking ConvexRepository,
+        // which requires a live Convex backend or an extracted trait.
+        // Full API endpoint testing should happen in integration tests.
+    }
+}

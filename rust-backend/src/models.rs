@@ -498,4 +498,35 @@ mod tests {
         assert!(!pending.is_confirmed());
         assert!(!pending.is_finalized());
     }
+
+    #[test]
+    fn test_create_paylink_request_serialization() {
+        let req = CreatePaylinkRequest {
+            ens_name: Some("alice.eth".to_string()),
+            recipient_public_key_hex: "0x123".to_string(),
+            metadata: Some(serde_json::json!({"item": "coffee"})),
+            chain_id: Some(8453),
+            network: Some("base".to_string()),
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("alice.eth"));
+        // verifies camelCase serialization
+        assert!(json.contains("recipientPublicKeyHex"));
+    }
+
+    #[test]
+    fn test_create_paylink_response_serialization() {
+        let res = CreatePaylinkResponse {
+            paylink_id: "pay1".to_string(),
+            stealth_address: "0xabc".to_string(),
+            ephemeral_pubkey_hex: "0xdef".to_string(),
+        };
+
+        let json = serde_json::to_string(&res).unwrap();
+        // verifies camelCase serialization
+        assert!(json.contains("paylinkId"));
+        assert!(json.contains("stealthAddress"));
+        assert!(json.contains("ephemeralPubkeyHex"));
+    }
 }
