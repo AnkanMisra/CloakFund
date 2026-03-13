@@ -137,7 +137,38 @@ Expose backend endpoints to generate paylinks and persist mappings between ENS i
 
 ---
 
-## Phase 4 — Frontend Integration (Next.js TSX)
+## Phase 4 — BitGo Consolidation Flow (Sweeper)
+**Objective**
+Implement consolidation process to move funds from ephemeral addresses to BitGo MPC vault.
+
+**Tasks**
+- Design consolidation jobs: manual trigger (button) and auto-sweep rules (configurable).
+- Implement `consolidator` module that constructs consolidation transactions and submits signing requests to BitGo REST.
+- Implement job state machine: `pending -> signed -> broadcasted -> confirmed -> failed`.
+- Implement co-sign notification handling (polling or webhook).
+- Implement safe idempotency and reconciliation: check UTXO-like finality and prevent double-spend.
+
+**Deliverables**
+- Consolidation job API: `POST /api/v1/consolidate?paylink_id=...` and job status endpoints.
+- Logs and reconciliation report showing consolidation txs (on explorer).
+
+**Acceptance criteria**
+- Consolidation job goes from pending to broadcasted on testnet with BitGo response (or simulated if BitGo dev sandbox has restrictions).
+- Backend records signed tx hash and updates DB.
+
+**Dependencies**
+- BitGo dev credentials and understanding of their REST signing flow.
+
+**Risks & mitigations**
+- BitGo rate limits or sandbox differences: prepare simulated signed payloads for demo fallback.
+
+**Agent instructions**
+- Implement robust job retry and error handling. Log only job ids; do not log keys.
+- Add `docs/BITGO_FLOW.md` describing API calls and required headers.
+
+---
+
+## Phase 5 — Frontend Integration (Next.js TSX)
 **Objective**
 Connect frontend to backend: generate paylinks in UI, show deposit status, and display aggregated balance and receipt links.
 
@@ -167,7 +198,7 @@ Connect frontend to backend: generate paylinks in UI, show deposit status, and d
 
 ---
 
-## Phase 5 — Fileverse Receipts Integration
+## Phase 6 — Fileverse Receipts Integration
 **Objective**
 Encrypt and store receipts in Fileverse, return pointers to frontend which decrypts client-side.
 
@@ -195,37 +226,6 @@ Encrypt and store receipts in Fileverse, return pointers to frontend which decry
 **Agent instructions**
 - Add `docs/RECEIPT_KEY_MGMT.md` describing chosen approach and security implications.
 - Provide sample JS decrypt utility for frontend.
-
----
-
-## Phase 6 — BitGo Consolidation Flow
-**Objective**
-Implement consolidation process to move funds from ephemeral addresses to BitGo MPC vault.
-
-**Tasks**
-- Design consolidation jobs: manual trigger (button) and auto-sweep rules (configurable).
-- Implement `consolidator` module that constructs consolidation transactions and submits signing requests to BitGo REST.
-- Implement job state machine: `pending -> signed -> broadcasted -> confirmed -> failed`.
-- Implement co-sign notification handling (polling or webhook).
-- Implement safe idempotency and reconciliation: check UTXO-like finality and prevent double-spend.
-
-**Deliverables**
-- Consolidation job API: `POST /api/v1/consolidate?paylink_id=...` and job status endpoints.
-- Logs and reconciliation report showing consolidation txs (on explorer).
-
-**Acceptance criteria**
-- Consolidation job goes from pending to broadcasted on testnet with BitGo response (or simulated if BitGo dev sandbox has restrictions).
-- Backend records signed tx hash and updates DB.
-
-**Dependencies**
-- BitGo dev credentials and understanding of their REST signing flow.
-
-**Risks & mitigations**
-- BitGo rate limits or sandbox differences: prepare simulated signed payloads for demo fallback.
-
-**Agent instructions**
-- Implement robust job retry and error handling. Log only job ids; do not log keys.
-- Add `docs/BITGO_FLOW.md` describing API calls and required headers.
 
 ---
 

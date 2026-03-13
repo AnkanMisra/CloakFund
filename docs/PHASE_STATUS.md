@@ -18,17 +18,17 @@ This document tracks the implementation progress of CloakFund across all phases 
 - **Status**: `done`
 - **Notes**: Exposed `POST /api/v1/paylink` and `GET /api/v1/paylink/:id` using Axum and persisted mappings in the Convex database using an atomic `createWithEphemeralAddress` mutation to prevent orphaned paylinks. Tested compilation and verified stealth integration with Convex data model.
 
-## Phase 4: Frontend Integration (Next.js TSX)
+## Phase 4: BitGo Consolidation Flow (Sweeper)
+- **Status**: `not_started`
+- **Notes**: Will build the consolidator module for submitting MPC signing requests to BitGo API.
+
+## Phase 5: Frontend Integration (Next.js TSX)
 - **Status**: `not_started`
 - **Notes**: Will scaffold Next.js app, configure Wagmi/Viem for wallet connection, and connect UI to Rust backend APIs.
 
-## Phase 5: Fileverse Receipts Integration
+## Phase 6: Fileverse Receipts Integration
 - **Status**: `not_started`
 - **Notes**: Will implement symmetric encryption of receipts and store metadata to Fileverse via REST.
-
-## Phase 6: BitGo Consolidation Flow
-- **Status**: `not_started`
-- **Notes**: Will build the consolidator module for submitting MPC signing requests to BitGo API.
 
 ## Phase 7: ENS & Smart Contract Helpers
 - **Status**: `not_started`
