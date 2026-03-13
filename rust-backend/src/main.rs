@@ -1,4 +1,4 @@
-wuse rust_backend::{
+use rust_backend::{
     AppConfig, ConvexRepository, SweeperService, WatcherService, create_router, stealth,
 };
 use std::env;
