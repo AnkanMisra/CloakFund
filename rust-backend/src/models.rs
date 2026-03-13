@@ -78,9 +78,7 @@ impl ConfirmationStatus {
     }
 
     pub fn from_confirmations(confirmations: u64, required_confirmations: u64) -> Self {
-        if confirmations == 0 {
-            Self::Pending
-        } else if confirmations < required_confirmations {
+        if confirmations < required_confirmations {
             Self::Pending
         } else if confirmations == required_confirmations {
             Self::Confirmed

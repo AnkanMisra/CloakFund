@@ -257,17 +257,19 @@ impl WatcherService {
                 }
             }
 
-            if confs > deposit.confirmations {
-                if let Err(e) = self
-                    .convex
-                    .update_confirmations(&deposit.id, confs, self.config.required_confirmations)
-                    .await
-                {
-                    error!(
-                        "Failed to update confirmations for deposit {}: {:?}",
-                        deposit.id, e
-                    );
-                }
+            if confs <= deposit.confirmations {
+                continue;
+            }
+
+            if let Err(e) = self
+                .convex
+                .update_confirmations(&deposit.id, confs, self.config.required_confirmations)
+                .await
+            {
+                error!(
+                    "Failed to update confirmations for deposit {}: {:?}",
+                    deposit.id, e
+                );
             }
         }
 

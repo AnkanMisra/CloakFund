@@ -268,7 +268,7 @@ export const updateConfirmations = mutation({
       return {
         depositId: existing._id,
         confirmations: existing.confirmations,
-        confirmationStatus: existing.confirmationStatus,
+        confirmationStatus: existing.confirmationStatus as any,
         confirmedAt: existing.confirmedAt,
       };
     }
