@@ -4,11 +4,11 @@ This document tracks the implementation progress of CloakFund across all phases 
 
 ## Phase 0: Preparation & Access
 - **Status**: `done`
-- **Notes**: Created `.env.example`, `SECRETS_SETUP.md`, and `test_wallets.md`. Established the required secrets structure and mock fallback strategies. Branch `feature/phases-implementation` created.
+- **Notes**: Created `.env.example`, `SECRETS_SETUP.md`, and `test_wallets.md`. Established the required secrets structure and mock fallback strategies. Phase 0 deliverables were re-reviewed and verified against `PHASES.md`, including env variable documentation, test wallet references, and secret handling guidance.
 
 ## Phase 1: Core Rust Backend: Stealth Generator Module
 - **Status**: `done`
-- **Notes**: Initialized `rust-backend` crate. Implemented ECDH stealth address generation using `k256` and `sha3` in `stealth.rs`. Added unit tests and verified deterministic outputs. Documented with `CRYPTO_TEST_VECTORS.md`.
+- **Notes**: Initialized `rust-backend` crate. Implemented ECDH stealth address generation and recipient-side stealth private key recovery using `k256` and `sha3` in `stealth.rs`. Added roundtrip and negative unit tests, verified deterministic outputs, added CLI usage, checksum address formatting, and documented the finalized implementation in `CRYPTOGRAPHY.md`, `RUST_BACKEND_DESIGN.md`, and `CRYPTO_TEST_VECTORS.md`. Phase 1 was re-reviewed and verified complete before proceeding.
 
 ## Phase 2: Deposit Watcher / Indexer
 - **Status**: `not_started`
