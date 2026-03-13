@@ -92,6 +92,13 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 - Integrated the watcher and a minimal Axum API into `main.rs` via a new `serve` command.
 - Provided a demonstration script (`scripts/watcher_test.sh`) that simulates a deposit and verifies Convex state updates, meeting the phase's final deliverable requirements.
 
+### Hardening and Bug Fixes
+- **Historical Block Catch-up:** Added logic to `watcher.rs` to fetch the `latest_processed_block` checkpoint from Convex on startup, automatically syncing missed blocks during downtime before opening the real-time WebSocket.
+- **Serialization Alignment:** Fixed Rust-to-Convex mapping by enforcing `camelCase` `serde` serialization for all cross-boundary models and explicitly renaming `_id` and `_creationTime`.
+- **Chain Reorg Robustness:** Corrected the reorg flow to affirmatively call the `mark_deposit_reorged` Convex mutation when an indexed transaction shifts blocks, preventing double-counting.
+- **Safety Checks:** Added data length checks for ERC20 parsing and fallback handling for missing block hashes to prevent crashes and silent skipping.
+- **Convex Admin Authentication:** Integrated `CONVEX_ADMIN_KEY` handling in the Rust client to authenticate backend mutations safely.
+
 ---
 
 *(This log will be continuously updated as subsequent phases are completed.)*
