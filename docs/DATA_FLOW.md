@@ -8,13 +8,13 @@
 
 Five architectural layers interact in a strictly unidirectional pipeline:
 
-| # | Layer | Technology | Responsibility |
-|---|-------|------------|----------------|
-| 1 | **Frontend** | Next.js / TypeScript | Wallet connection, ENS input, payment links, dashboard, receipt decryption |
-| 2 | **Backend** | Rust (Tokio async) | Stealth address generation, watcher, treasury engine, encryption |
-| 3 | **Blockchain** | Base (L2) | On-chain settlement, smart contracts (`PaymentResolver`, `TreasuryForwarder`) |
-| 4 | **Treasury** | BitGo MPC | Multi-sig custody, fund consolidation |
-| 5 | **Storage** | Fileverse | Encrypted receipt & financial record persistence |
+| #   | Layer          | Technology           | Responsibility                                                                |
+| --- | -------------- | -------------------- | ----------------------------------------------------------------------------- |
+| 1   | **Frontend**   | Next.js / TypeScript | Wallet connection, ENS input, payment links, dashboard, receipt decryption    |
+| 2   | **Backend**    | Rust (Tokio async)   | Stealth address generation, watcher, treasury engine, encryption              |
+| 3   | **Blockchain** | Base (L2)            | On-chain settlement, smart contracts (`PaymentResolver`, `TreasuryForwarder`) |
+| 4   | **Treasury**   | BitGo MPC            | Multi-sig custody, fund consolidation                                         |
+| 5   | **Storage**    | Fileverse            | Encrypted receipt & financial record persistence                              |
 
 ```mermaid
 flowchart LR
@@ -229,22 +229,22 @@ flowchart TD
 
 ## 5. API Endpoints Summary
 
-| Method | Endpoint | Description | Triggered By |
-|--------|----------|-------------|--------------|
-| `POST` | `/paylink` | Generate a stealth payment address | Frontend → Stealth Generator |
-| `GET` | `/deposit-status` | Check payment confirmation status | Frontend → Watcher Service |
-| `POST` | `/consolidate` | Move funds to BitGo MPC treasury | Backend → Treasury Engine |
-| `GET` | `/receipts` | Retrieve encrypted receipt list | Frontend → Fileverse |
+| Method | Endpoint          | Description                        | Triggered By                 |
+| ------ | ----------------- | ---------------------------------- | ---------------------------- |
+| `POST` | `/paylink`        | Generate a stealth payment address | Frontend → Stealth Generator |
+| `GET`  | `/deposit-status` | Check payment confirmation status  | Frontend → Watcher Service   |
+| `POST` | `/consolidate`    | Move funds to BitGo MPC treasury   | Backend → Treasury Engine    |
+| `GET`  | `/receipts`       | Retrieve encrypted receipt list    | Frontend → Fileverse         |
 
 ---
 
 ## 6. Security Invariants Across the Flow
 
-| Invariant | Enforced By |
-|-----------|-------------|
-| No private keys stored server-side | Rust backend design — stateless key handling |
-| Ephemeral keys destroyed after use | Stealth Generator — in-memory only |
-| All encryption performed client-side | Frontend decrypts receipts locally |
-| Stealth addresses prevent clustering | ECDH-derived one-time addresses |
-| Treasury requires multi-sig approval | BitGo MPC — threshold signatures |
-| Metadata encrypted at rest | Fileverse — ChaCha20-Poly1305 / AES-GCM |
+| Invariant                            | Enforced By                                  |
+| ------------------------------------ | -------------------------------------------- |
+| No private keys stored server-side   | Rust backend design — stateless key handling |
+| Ephemeral keys destroyed after use   | Stealth Generator — in-memory only           |
+| All encryption performed client-side | Frontend decrypts receipts locally           |
+| Stealth addresses prevent clustering | ECDH-derived one-time addresses              |
+| Treasury requires multi-sig approval | BitGo MPC — threshold signatures             |
+| Metadata encrypted at rest           | Fileverse — ChaCha20-Poly1305 / AES-GCM      |
