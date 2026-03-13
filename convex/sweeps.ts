@@ -97,6 +97,17 @@ export const createSweepJob = mutation({
   },
   returns: v.id("sweepJobs"),
   handler: async (ctx, args) => {
+    const deposit = await ctx.db.get(args.depositId);
+    if (!deposit) {
+      throw new Error("Deposit not found");
+    }
+    if (
+      deposit.confirmationStatus !== "confirmed" &&
+      deposit.confirmationStatus !== "finalized"
+    ) {
+      throw new Error("Deposit is not confirmed");
+    }
+
     const existing = await ctx.db
       .query("sweepJobs")
       .withIndex("by_deposit", (q) => q.eq("depositId", args.depositId))

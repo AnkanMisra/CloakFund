@@ -9,21 +9,35 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct EphemeralPrivateKey(pub [u8; 32]);
 
+pub enum SweepOutcome {
+    Success(H256),
+    SkippedZeroBalance,
+    SkippedInsufficientGas { balance: U256, gas_cost: U256 },
+    SkippedDryRun,
+}
+
 /// Handles the consolidation/sweeping of funds from ephemeral stealth addresses
 /// to the centralized treasury (e.g., BitGo vault).
 pub struct Consolidator {
     provider: Arc<Provider<Ws>>,
     treasury_address: Address,
     dry_run: bool,
+    chain_id: u64,
 }
 
 impl Consolidator {
     /// Creates a new Consolidator instance.
-    pub fn new(provider: Arc<Provider<Ws>>, treasury_address: Address, dry_run: bool) -> Self {
+    pub fn new(
+        provider: Arc<Provider<Ws>>,
+        treasury_address: Address,
+        dry_run: bool,
+        chain_id: u64,
+    ) -> Self {
         Self {
             provider,
             treasury_address,
             dry_run,
+            chain_id,
         }
     }
 
@@ -33,9 +47,10 @@ impl Consolidator {
         &self,
         ephemeral_key: EphemeralPrivateKey,
         from_address: Address,
-    ) -> Result<H256> {
+    ) -> Result<SweepOutcome> {
         let wallet = LocalWallet::from_bytes(&ephemeral_key.0)
-            .context("Failed to construct wallet from ephemeral private key")?;
+            .context("Failed to construct wallet from ephemeral private key")?
+            .with_chain_id(self.chain_id);
 
         // Ensure the derived address matches the expected ephemeral address to prevent mistakes
         if wallet.address() != from_address {
@@ -55,7 +70,7 @@ impl Consolidator {
                 "Attempted to sweep an address with zero balance: {:?}",
                 from_address
             );
-            return Ok(H256::zero());
+            return Ok(SweepOutcome::SkippedZeroBalance);
         }
 
         // Estimate gas for a simple ETH transfer
@@ -73,7 +88,7 @@ impl Consolidator {
                 "Balance ({}) is too low to cover gas cost ({}) for address {:?}",
                 balance, gas_cost, from_address
             );
-            return Ok(H256::zero());
+            return Ok(SweepOutcome::SkippedInsufficientGas { balance, gas_cost });
         }
 
         let sweep_amount = balance.saturating_sub(gas_cost);
@@ -94,7 +109,7 @@ impl Consolidator {
                 "DRY RUN: Skipping transaction broadcast for {:?}",
                 from_address
             );
-            return Ok(H256::zero());
+            return Ok(SweepOutcome::SkippedDryRun);
         }
 
         let pending_tx = client
@@ -105,7 +120,7 @@ impl Consolidator {
         let tx_hash = pending_tx.tx_hash();
         info!("Broadcasted sweep tx {} from {:?}", tx_hash, from_address);
 
-        Ok(tx_hash)
+        Ok(SweepOutcome::Success(tx_hash))
     }
 
     /// Placeholder for ERC20 sweeping logic.
@@ -114,9 +129,9 @@ impl Consolidator {
         _ephemeral_key: EphemeralPrivateKey,
         _from_address: Address,
         _token_address: Address,
-    ) -> Result<H256> {
+    ) -> Result<SweepOutcome> {
         warn!("ERC20 sweeping not yet implemented.");
-        Ok(H256::zero())
+        Ok(SweepOutcome::SkippedZeroBalance) // Placeholder
     }
 }
 

@@ -115,7 +115,7 @@ impl SweeperConfig {
             dry_run: parse_env_or_default("SWEEPER_DRY_RUN", false)?,
             bitgo_base_url: env::var("BITGO_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3080".to_string()),
-            bitgo_access_token: env::var("BITGO_ACCESS_TOKEN").unwrap_or_default(),
+            bitgo_access_token: required_env("BITGO_ACCESS_TOKEN")?,
         })
     }
 }
@@ -211,6 +211,7 @@ mod tests {
                 "TREASURY_ADDRESS",
                 "0x0000000000000000000000000000000000000000",
             );
+            env::set_var("BITGO_ACCESS_TOKEN", "test-token");
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -231,7 +232,7 @@ mod tests {
         );
         assert_eq!(config.sweeper.dry_run, false);
         assert_eq!(config.sweeper.bitgo_base_url, "http://localhost:3080");
-        assert_eq!(config.sweeper.bitgo_access_token, "");
+        assert_eq!(config.sweeper.bitgo_access_token, "test-token");
     }
 
     #[test]
@@ -261,6 +262,7 @@ mod tests {
                 "TREASURY_ADDRESS",
                 "0x1234567890123456789012345678901234567890",
             );
+            env::set_var("BITGO_ACCESS_TOKEN", "test-token");
         }
 
         let config = AppConfig::from_env().unwrap();

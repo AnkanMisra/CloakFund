@@ -126,6 +126,19 @@ async fn consolidate_funds(
     State(state): State<Arc<ConvexRepository>>,
     Json(payload): Json<ConsolidateRequest>,
 ) -> impl IntoResponse {
+    // Note: To fully satisfy the confirmation check, we should ideally verify
+    // the deposit's status here or in the `createSweepJob` Convex mutation.
+    // If a `get_deposit` method is available on ConvexRepository, it would look like:
+    //
+    // if let Ok(Some(deposit)) = state.get_deposit(&payload.deposit_id).await {
+    //     if deposit.confirmation_status != "confirmed" {
+    //         return (
+    //             axum::http::StatusCode::BAD_REQUEST,
+    //             Json(json!({ "error": "Deposit is not confirmed" })),
+    //         ).into_response();
+    //     }
+    // }
+
     match state.create_sweep_job(&payload.deposit_id).await {
         Ok(job_id) => (
             axum::http::StatusCode::ACCEPTED,
@@ -142,9 +155,68 @@ async fn consolidate_funds(
 
 async fn bitgo_webhook(
     State(_state): State<Arc<ConvexRepository>>,
-    Json(payload): Json<serde_json::Value>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    tracing::info!("Received BitGo webhook: {:?}", payload);
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let signature = match headers.get("BitGo-Signature").and_then(|v| v.to_str().ok()) {
+        Some(sig) => sig,
+        None => {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Missing signature" })),
+            )
+                .into_response();
+        }
+    };
+
+    let secret = std::env::var("BITGO_WEBHOOK_SECRET").unwrap_or_default();
+    if secret.is_empty() {
+        tracing::warn!("BITGO_WEBHOOK_SECRET is not set; rejecting webhook");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Webhook secret not configured" })),
+        )
+            .into_response();
+    }
+
+    let mut mac = match Hmac::<Sha256>::new_from_slice(secret.as_bytes()) {
+        Ok(mac) => mac,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Invalid HMAC secret" })),
+            )
+                .into_response();
+        }
+    };
+
+    mac.update(&body);
+    let expected_sig = hex::encode(mac.finalize().into_bytes());
+
+    if signature != expected_sig {
+        tracing::warn!("Invalid BitGo webhook signature");
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Invalid signature" })),
+        )
+            .into_response();
+    }
+
+    let payload: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid JSON body" })),
+            )
+                .into_response();
+        }
+    };
+
+    tracing::info!("Received verified BitGo webhook: {:?}", payload);
 
     // In a complete implementation, we'd parse the BitGo webhook payload
     // and trigger updates in Convex (e.g., mark the sweep job as completed

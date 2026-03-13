@@ -5,11 +5,12 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::config::{SweeperConfig, WatcherConfig};
-use crate::consolidator::{Consolidator, EphemeralPrivateKey};
+use crate::consolidator::{Consolidator, EphemeralPrivateKey, SweepOutcome};
 use crate::convex_client::ConvexRepository;
 use crate::stealth;
 use std::env;
 use std::str::FromStr;
+use zeroize::{Zeroize, Zeroizing};
 
 /// The SweeperService monitors Convex for finalized deposits and sweeps them
 /// to the centralized treasury (e.g., BitGo vault).
@@ -28,13 +29,15 @@ impl SweeperService {
     pub async fn start(&self) -> Result<()> {
         info!("Starting SweeperService...");
 
+        let sweeper_config = SweeperConfig::from_env().context("Failed to load sweeper config")?;
+
         let provider = Provider::<Ws>::connect(&self.config.base_wss_url)
             .await
             .context("Failed to connect to Base WSS endpoint for sweeper")?;
         let provider = Arc::new(provider);
 
         loop {
-            if let Err(e) = self.process_pending_jobs(&provider).await {
+            if let Err(e) = self.process_pending_jobs(&provider, &sweeper_config).await {
                 error!("Error in sweeper loop: {:?}", e);
             }
             sleep(Duration::from_secs(self.config.polling_interval_secs)).await;
@@ -42,7 +45,11 @@ impl SweeperService {
     }
 
     /// Queries pending sweep jobs from Convex and attempts to execute them.
-    async fn process_pending_jobs(&self, provider: &Arc<Provider<Ws>>) -> Result<()> {
+    async fn process_pending_jobs(
+        &self,
+        provider: &Arc<Provider<Ws>>,
+        sweeper_config: &SweeperConfig,
+    ) -> Result<()> {
         debug!("Checking for pending sweep jobs...");
 
         let jobs = self.convex.get_pending_sweep_jobs().await?;
@@ -50,19 +57,15 @@ impl SweeperService {
             return Ok(());
         }
 
-        let sweeper_config = match SweeperConfig::from_env() {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Missing sweeper config: {:?}", e);
-                return Ok(());
-            }
-        };
-
         let treasury_addr = Address::from_str(&sweeper_config.treasury_address)
             .context("Invalid treasury address format")?;
 
-        let consolidator =
-            Consolidator::new(provider.clone(), treasury_addr, sweeper_config.dry_run);
+        let consolidator = Consolidator::new(
+            provider.clone(),
+            treasury_addr,
+            sweeper_config.dry_run,
+            self.config.chain_id,
+        );
 
         let recipient_priv_hex = env::var("RECIPIENT_PRIVATE_KEY_HEX").unwrap_or_default();
         if recipient_priv_hex.is_empty() {
@@ -72,9 +75,17 @@ impl SweeperService {
 
         for job in jobs {
             info!("Processing sweep job: {}", job.id);
-            self.convex
+            if let Err(e) = self
+                .convex
                 .update_sweep_job_status(&job.id, "broadcasting", None)
-                .await?;
+                .await
+            {
+                error!(
+                    "Failed to update sweep job {} to broadcasting: {:?}",
+                    job.id, e
+                );
+                continue;
+            }
 
             let stealth_address = match Address::from_str(&job.stealth_address) {
                 Ok(addr) => addr,
@@ -92,7 +103,7 @@ impl SweeperService {
                 &recipient_priv_hex,
                 &job.ephemeral_pubkey_hex,
             ) {
-                Ok(key) => key,
+                Ok(key) => Zeroizing::new(key),
                 Err(e) => {
                     error!(
                         "Failed to recover stealth private key for job {}: {}",
@@ -121,9 +132,12 @@ impl SweeperService {
                 }
             }
 
+            let ephemeral_key = EphemeralPrivateKey(ephem_priv_key);
+            ephem_priv_key.zeroize();
+
             let sweep_result = if job.asset_type == "native" {
                 consolidator
-                    .sweep_native(EphemeralPrivateKey(ephem_priv_key), stealth_address)
+                    .sweep_native(ephemeral_key, stealth_address)
                     .await
             } else if job.asset_type == "erc20" {
                 let token_address = match job.token_address.as_deref().map(Address::from_str) {
@@ -141,11 +155,7 @@ impl SweeperService {
                     }
                 };
                 consolidator
-                    .sweep_erc20(
-                        EphemeralPrivateKey(ephem_priv_key),
-                        stealth_address,
-                        token_address,
-                    )
+                    .sweep_erc20(ephemeral_key, stealth_address, token_address)
                     .await
             } else {
                 error!("Unknown asset type {} for job {}", job.asset_type, job.id);
@@ -157,18 +167,54 @@ impl SweeperService {
             };
 
             match sweep_result {
-                Ok(tx_hash) => {
+                Ok(SweepOutcome::Success(tx_hash)) => {
                     let tx_hash_str = format!("{:#x}", tx_hash);
                     info!("Successfully swept job {}. Tx: {}", job.id, tx_hash_str);
-                    self.convex
+                    if let Err(e) = self
+                        .convex
                         .update_sweep_job_status(&job.id, "completed", Some(tx_hash_str))
-                        .await?;
+                        .await
+                    {
+                        error!("Failed to update job {} to completed: {:?}", job.id, e);
+                    }
+                }
+                Ok(SweepOutcome::SkippedZeroBalance) => {
+                    warn!(
+                        "Skipped sweep job {} due to zero balance; returning to queued",
+                        job.id
+                    );
+                    let _ = self
+                        .convex
+                        .update_sweep_job_status(&job.id, "queued", None)
+                        .await;
+                }
+                Ok(SweepOutcome::SkippedInsufficientGas { balance, gas_cost }) => {
+                    warn!(
+                        "Skipped sweep job {} due to insufficient gas (balance: {}, gas_cost: {}); returning to queued",
+                        job.id, balance, gas_cost
+                    );
+                    let _ = self
+                        .convex
+                        .update_sweep_job_status(&job.id, "queued", None)
+                        .await;
+                }
+                Ok(SweepOutcome::SkippedDryRun) => {
+                    info!(
+                        "DRY RUN: Skipped sweep job {}; marking as completed with zero hash",
+                        job.id
+                    );
+                    let tx_hash_str = format!("{:#x}", H256::zero());
+                    let _ = self
+                        .convex
+                        .update_sweep_job_status(&job.id, "completed", Some(tx_hash_str))
+                        .await;
                 }
                 Err(e) => {
                     error!("Failed to execute sweep for job {}: {:?}", job.id, e);
-                    self.convex
+                    let _ = self
+                        .convex
                         .update_sweep_job_status(&job.id, "failed", None)
-                        .await?;
+                        .await;
                 }
             }
         }
