@@ -27,7 +27,42 @@ alice.eth
 
 ---
 
-## ✨ Key Features
+## Project Status
+
+### Phase 0 — Preparation & Access
+Completed.
+
+Delivered:
+- `.env.example`
+- `docs/SECRETS_SETUP.md`
+- `docs/test_wallets.md`
+
+### Phase 1 — Core Rust Backend: Stealth Generator Module
+Completed and reviewed.
+
+Delivered:
+- `rust-backend/src/stealth.rs`
+- `rust-backend/src/main.rs`
+- `docs/CRYPTOGRAPHY.md`
+- `docs/RUST_BACKEND_DESIGN.md`
+- `docs/CRYPTO_TEST_VECTORS.md`
+
+Implemented:
+- Stealth address generation using ECDH on secp256k1
+- Recipient-side stealth private key recovery
+- EIP-55 checksum address formatting
+- View tag generation and return value support
+- CLI commands for `generate` and `recover`
+- Roundtrip and negative unit tests
+
+Verification:
+- Rust test suite passes for Phase 1
+- Deterministic cryptographic vectors documented
+- Phase 0 and Phase 1 were re-reviewed before moving forward
+
+---
+
+## Key Features
 
 | Feature                      | Description                                                           |
 | ---------------------------- | --------------------------------------------------------------------- |

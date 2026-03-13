@@ -1,0 +1,9 @@
+[package]
+name = "rust-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hex = "0.4.3"
+k256 = { version = "0.13.4", features = ["ecdh"] }
+sha3 = "0.10.8"
