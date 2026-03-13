@@ -1,6 +1,6 @@
 # Phase Status Tracking
 
-This document tracks the implementation progress of CloakFund across all phases defined in `phases.md`.
+This document tracks the implementation progress of CloakFund across all phases defined in `PHASES.md`.
 
 ## Phase 0: Preparation & Access
 - **Status**: `done`
