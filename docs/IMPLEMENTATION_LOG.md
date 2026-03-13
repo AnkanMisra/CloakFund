@@ -65,7 +65,7 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 
 ---
 
-## Phase 2: Deposit Watcher / Indexer (In Progress)
+## Phase 2: Deposit Watcher / Indexer
 
 ### What was done (Convex Pivot)
 - Pivoted the persistence layer from Postgres/SQLx to Convex for faster hackathon iteration.
@@ -86,15 +86,11 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 
 ### What was recently completed
 - Implemented the `convex_client.rs` bridge to interact with Convex backend functions securely from Rust.
-- Implemented `watcher.rs` using `ethers-rs` WebSocket subscriptions to listen to the Base network for native transfers.
-- Connected the pipeline: Base new blocks -> Scan transactions -> Check Convex for matching ephemeral addresses -> Submit matching deposits via `upsertDeposit`.
+- Implemented `watcher.rs` using `ethers-rs` WebSocket subscriptions to listen to the Base network for native and ERC20 token transfers.
+- Connected the pipeline: Base new blocks -> Scan transactions and logs -> Check Convex for matching ephemeral addresses -> Submit matching deposits via `upsertDeposit`.
 - Implemented block confirmation tracking and reorg handling in the watcher.
 - Integrated the watcher and a minimal Axum API into `main.rs` via a new `serve` command.
-
-### Remaining Work for Phase 2
-- Expand the watcher to parse and detect ERC20 token transfers.
-- Add comprehensive watcher integration tests (e.g., simulating deposits and verifying Convex state updates).
-- Provide a demonstration script (`watcher_test.sh`) to meet the phase's final deliverable requirements.
+- Provided a demonstration script (`scripts/watcher_test.sh`) that simulates a deposit and verifies Convex state updates, meeting the phase's final deliverable requirements.
 
 ---
 

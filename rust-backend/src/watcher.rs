@@ -135,6 +135,80 @@ impl WatcherService {
             }
         }
 
+        // Check for ERC20 Transfers
+        let transfer_topic =
+            H256::from_str("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
+                .unwrap();
+
+        let logs_filter = Filter::new().at_block_hash(block.hash.unwrap_or_default());
+        if let Ok(logs) = provider.get_logs(&logs_filter).await {
+            for log in logs {
+                if log.topics.len() == 3 && log.topics[0] == transfer_topic {
+                    let from = Address::from(log.topics[1]);
+                    let to = Address::from(log.topics[2]);
+                    let to_hex = format!("{:#x}", to);
+
+                    if let Ok(Some(match_res)) = self
+                        .convex
+                        .get_ephemeral_address_match(self.config.chain_id, &to_hex)
+                        .await
+                    {
+                        let data = if log.data.len() >= 32 {
+                            &log.data[0..32]
+                        } else {
+                            &log.data
+                        };
+                        let value = U256::from_big_endian(data);
+
+                        if value > U256::zero() {
+                            let tx_hash_hex = log
+                                .transaction_hash
+                                .map(|h| format!("{:#x}", h))
+                                .unwrap_or_default();
+                            let token_address = format!("{:#x}", log.address);
+
+                            let deposit = NewDeposit {
+                                paylink_id: match_res.paylink_id,
+                                ephemeral_address_id: match_res.ephemeral_address_id,
+                                tx_hash: tx_hash_hex,
+                                log_index: log.log_index.map(|i| i.as_u64()),
+                                block_number,
+                                block_hash: block_hash_opt.clone(),
+                                from_address: format!("{:#x}", from),
+                                to_address: to_hex,
+                                asset_type: AssetType::Erc20,
+                                token_address: Some(token_address.clone()),
+                                amount: value.to_string(),
+                                decimals: None,
+                                symbol: None,
+                                confirmations: 1,
+                                confirmation_status: ConfirmationStatus::from_confirmations(
+                                    1,
+                                    self.config.required_confirmations,
+                                ),
+                                detected_at: Some(
+                                    SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_millis() as u64,
+                                ),
+                                confirmed_at: None,
+                            };
+
+                            info!(
+                                "Detected ERC20 deposit of {} (token: {}) to {}",
+                                deposit.amount, token_address, deposit.to_address
+                            );
+
+                            if let Err(e) = self.convex.upsert_deposit(&deposit).await {
+                                error!("Failed to upsert deposit to Convex: {:?}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
