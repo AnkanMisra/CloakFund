@@ -95,6 +95,7 @@ pub struct PaylinkRecord {
     pub id: String,
     #[serde(rename = "_creationTime")]
     pub creation_time: u64,
+    pub user_id: Option<String>,
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
     pub status: String,
@@ -148,6 +149,7 @@ pub struct DepositRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPaylink {
+    pub user_id: Option<String>,
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
     pub metadata: Option<serde_json::Value>,
@@ -348,8 +350,62 @@ pub struct DepositStatusApiResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreatePaylinkRequest {
+    pub ens_name: Option<String>,
+    pub recipient_public_key_hex: String,
+    pub metadata: Option<serde_json::Value>,
+    pub chain_id: Option<u64>,
+    pub network: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePaylinkResponse {
+    pub paylink_id: String,
+    pub stealth_address: String,
+    pub ephemeral_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaylinkIdParam {
     pub paylink_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserRecord {
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_creationTime")]
+    pub creation_time: u64,
+    pub wallet_address: String,
+    pub ens_name: Option<String>,
+    pub public_key_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiptRecord {
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_creationTime")]
+    pub creation_time: u64,
+    pub deposit_id: String,
+    pub encrypted_payload: String,
+    pub fileverse_pointer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SweepJobRecord {
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_creationTime")]
+    pub creation_time: u64,
+    pub deposit_id: String,
+    pub status: String,
+    pub sweep_tx_hash: Option<String>,
 }
 
 impl DepositRecord {

@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use crate::config::ConvexClientConfig;
 use crate::models::{
     ConfirmationUpdateResult, DepositMatch, DepositRecord, DepositStatusResponse, NewDeposit,
-    UpsertDepositResult, WatcherCheckpoint,
+    SweepJobRecord, UpsertDepositResult, WatcherCheckpoint,
 };
 
 /// A repository interface for interacting with the Convex backend functions.
@@ -34,6 +34,87 @@ impl ConvexRepository {
         Ok(Self {
             client: Arc::new(Mutex::new(client)),
         })
+    }
+
+    /// Creates a new paylink in Convex.
+    pub async fn create_paylink(
+        &self,
+        paylink: &crate::models::NewPaylink,
+    ) -> Result<serde_json::Value> {
+        let json_val = serde_json::to_value(paylink)?;
+        let convex_val = json_to_convex(json_val);
+
+        let args = if let convex::Value::Object(map) = convex_val {
+            map
+        } else {
+            anyhow::bail!("Invalid paylink object")
+        };
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("paylinks:create", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Creates a new ephemeral address for a paylink in Convex.
+    pub async fn create_ephemeral_address(
+        &self,
+        address: &crate::models::NewEphemeralAddress,
+    ) -> Result<serde_json::Value> {
+        let json_val = serde_json::to_value(address)?;
+        let convex_val = json_to_convex(json_val);
+
+        let args = if let convex::Value::Object(map) = convex_val {
+            map
+        } else {
+            anyhow::bail!("Invalid ephemeral address object")
+        };
+
+        let mut client = self.client.lock().await;
+        let result = client
+            .mutation("paylinks:createEphemeralAddress", args)
+            .await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Gets a paylink by ID.
+    pub async fn get_paylink(&self, paylink_id: &str) -> Result<Option<serde_json::Value>> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "paylinkId".to_string(),
+            convex::Value::String(paylink_id.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.query("paylinks:getById", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let json = convex_to_json(val);
+                if json.is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(json))
+                }
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
     }
 
     /// Queries Convex to check if a stealth address corresponds to a known paylink on a given chain.
@@ -224,6 +305,57 @@ impl ConvexRepository {
                 let res: DepositStatusResponse = serde_json::from_value(convex_to_json(val))?;
                 Ok(res)
             }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Fetches pending sweep jobs.
+    pub async fn get_pending_sweep_jobs(&self) -> Result<Vec<SweepJobRecord>> {
+        let args = std::collections::BTreeMap::new();
+
+        let mut client = self.client.lock().await;
+        let result = client.query("sweeps:getPendingSweepJobs", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let res: Vec<SweepJobRecord> = serde_json::from_value(convex_to_json(val))?;
+                Ok(res)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Updates the status of a sweep job.
+    pub async fn update_sweep_job_status(
+        &self,
+        job_id: &str,
+        status: &str,
+        sweep_tx_hash: Option<String>,
+    ) -> Result<()> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "jobId".to_string(),
+            convex::Value::String(job_id.to_string()),
+        );
+        args.insert(
+            "status".to_string(),
+            convex::Value::String(status.to_string()),
+        );
+        if let Some(hash) = sweep_tx_hash {
+            args.insert("sweepTxHash".to_string(), convex::Value::String(hash));
+        }
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("sweeps:updateSweepJobStatus", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(_) => Ok(()),
             convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
             convex::FunctionResult::ConvexError(err) => {
                 anyhow::bail!("Convex logic error: {}", err.message)

@@ -2,7 +2,16 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  users: defineTable({
+    walletAddress: v.string(),
+    ensName: v.optional(v.string()),
+    publicKeyHex: v.string(),
+  })
+    .index("by_wallet", ["walletAddress"])
+    .index("by_ens", ["ensName"]),
+
   paylinks: defineTable({
+    userId: v.optional(v.id("users")),
     ensName: v.optional(v.string()),
     recipientPublicKeyHex: v.string(),
     status: v.union(
@@ -73,4 +82,23 @@ export default defineSchema({
     .index("by_tx_hash", ["txHash"])
     .index("by_confirmation_status", ["confirmationStatus"])
     .index("by_block_number", ["blockNumber"]),
+
+  receipts: defineTable({
+    depositId: v.id("deposits"),
+    encryptedPayload: v.string(),
+    fileversePointer: v.optional(v.string()),
+  }).index("by_deposit", ["depositId"]),
+
+  sweepJobs: defineTable({
+    depositId: v.id("deposits"),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("broadcasting"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    sweepTxHash: v.optional(v.string()),
+  })
+    .index("by_deposit", ["depositId"])
+    .index("by_status", ["status"]),
 });

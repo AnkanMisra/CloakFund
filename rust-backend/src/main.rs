@@ -1,4 +1,6 @@
-use rust_backend::{AppConfig, ConvexRepository, WatcherService, create_router, stealth};
+use rust_backend::{
+    AppConfig, ConvexRepository, SweeperService, WatcherService, create_router, stealth,
+};
 use std::env;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -76,8 +78,16 @@ async fn run_server() -> anyhow::Result<()> {
         }
     });
 
+    info!("Starting sweeper service...");
+    let sweeper = SweeperService::new(config.watcher.clone(), convex.clone());
+    tokio::spawn(async move {
+        if let Err(e) = sweeper.start().await {
+            error!("Sweeper service failed: {}", e);
+        }
+    });
+
     info!("Starting API server on {}", config.server.bind_addr);
-    let app = create_router();
+    let app = create_router(convex);
     let listener = TcpListener::bind(config.server.bind_addr).await?;
     axum::serve(listener, app).await?;
 

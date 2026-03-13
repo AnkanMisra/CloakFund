@@ -158,6 +158,22 @@ export const upsertDeposit = mutation({
         }
       }
 
+      if (
+        args.confirmationStatus === "finalized" &&
+        existing.confirmationStatus !== "finalized"
+      ) {
+        const existingJob = await ctx.db
+          .query("sweepJobs")
+          .withIndex("by_deposit", (q) => q.eq("depositId", existing._id))
+          .first();
+        if (!existingJob) {
+          await ctx.db.insert("sweepJobs", {
+            depositId: existing._id,
+            status: "queued",
+          });
+        }
+      }
+
       return {
         depositId: existing._id,
         paylinkId: existing.paylinkId,
@@ -209,6 +225,13 @@ export const upsertDeposit = mutation({
           status: "funded",
         });
       }
+    }
+
+    if (args.confirmationStatus === "finalized") {
+      await ctx.db.insert("sweepJobs", {
+        depositId,
+        status: "queued",
+      });
     }
 
     return {
@@ -298,6 +321,22 @@ export const updateConfirmations = mutation({
       if (ephemeralAddress && ephemeralAddress.status === "announced") {
         await ctx.db.patch(existing.ephemeralAddressId, {
           status: "funded",
+        });
+      }
+    }
+
+    if (
+      nextStatus === "finalized" &&
+      existing.confirmationStatus !== "finalized"
+    ) {
+      const existingJob = await ctx.db
+        .query("sweepJobs")
+        .withIndex("by_deposit", (q) => q.eq("depositId", existing._id))
+        .first();
+      if (!existingJob) {
+        await ctx.db.insert("sweepJobs", {
+          depositId: existing._id,
+          status: "queued",
         });
       }
     }

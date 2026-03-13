@@ -14,6 +14,7 @@ function normalizeAddress(value: string): string {
 
 export const create = mutation({
   args: {
+    userId: v.optional(v.id("users")),
     ensName: v.optional(v.string()),
     recipientPublicKeyHex: v.string(),
     metadata: v.optional(v.any()),
@@ -22,6 +23,7 @@ export const create = mutation({
   },
   returns: v.object({
     paylinkId: v.id("paylinks"),
+    userId: v.optional(v.id("users")),
     ensName: v.optional(v.string()),
     recipientPublicKeyHex: v.string(),
     status: v.string(),
@@ -31,6 +33,7 @@ export const create = mutation({
   }),
   handler: async (ctx, args) => {
     const paylinkId = await ctx.db.insert("paylinks", {
+      userId: args.userId,
       ensName: args.ensName,
       recipientPublicKeyHex: normalizeHex(args.recipientPublicKeyHex),
       status: "active",
@@ -46,6 +49,7 @@ export const create = mutation({
 
     return {
       paylinkId,
+      userId: paylink.userId,
       ensName: paylink.ensName,
       recipientPublicKeyHex: paylink.recipientPublicKeyHex,
       status: paylink.status,
@@ -147,6 +151,7 @@ export const getById = query({
     v.object({
       _id: v.id("paylinks"),
       _creationTime: v.number(),
+      userId: v.optional(v.id("users")),
       ensName: v.optional(v.string()),
       recipientPublicKeyHex: v.string(),
       status: v.union(
@@ -204,6 +209,7 @@ export const listByEnsName = query({
     v.object({
       _id: v.id("paylinks"),
       _creationTime: v.number(),
+      userId: v.optional(v.id("users")),
       ensName: v.optional(v.string()),
       recipientPublicKeyHex: v.string(),
       status: v.union(
