@@ -85,7 +85,7 @@ Build the watcher that subscribes to Base events and matches incoming payments t
 
 **Deliverables**
 - `watcher` module integrated into backend with logs.
-- SQL migrations for DB tables.
+- Convex schema definitions for DB tables.
 - Endpoint `GET /api/v1/deposit-status?paylink_id=...`.
 - Demonstration script that creates a paylink, sends a test tx, and shows deposit record.
 
@@ -95,14 +95,14 @@ Build the watcher that subscribes to Base events and matches incoming payments t
 - Watcher handles restart without duplicating processing.
 
 **Dependencies**
-- Base WSS endpoint, Postgres DB.
+- Base WSS endpoint, Convex DB.
 
 **Risks & mitigations**
 - Network disconnections: implement reconnect logic with backoff.
 - Missed events: support historical log sync via block range scan.
 
 **Agent instructions**
-- Create DB migrations and include a sample `docker-compose` DB config or connection guidance in `BUILD.md`.
+- Create Convex schema definitions and include connection guidance in `BUILD.md`.
 - Provide a `watcher_test.sh` script demonstrating detection.
 
 ---
