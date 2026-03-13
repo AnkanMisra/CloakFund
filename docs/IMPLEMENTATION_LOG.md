@@ -101,4 +101,25 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 
 ---
 
+## Phase 3: Paylink API & Persistence
+
+### What was done
+- Setup the Rust Axum HTTP server in `rust-backend/src/api.rs`.
+- Created JSON request and response models for paylink operations in `rust-backend/src/models.rs`.
+- Built the `POST /api/v1/paylink` endpoint to orchestrate stealth address generation and Convex persistence.
+- Built the `GET /api/v1/paylink/:id` endpoint to retrieve paylink metadata and generated stealth addresses.
+- Updated `docs/API.md` to cleanly document the Phase 3 HTTP endpoints and payloads.
+
+### How it was done
+- **Axum Router:** Configured a minimal but robust router with CORS enabled for the future Next.js frontend, taking an `Arc<ConvexRepository>` as shared state.
+- **Atomic Operations:** Added the `createWithEphemeralAddress` mutation directly into the Convex backend (`paylinks.ts`). Instead of making two separate network requests from Rust (which risked creating orphaned paylinks if the second failed), the Rust API now makes a single atomic call to Convex to guarantee database consistency.
+- **Stealth Integration:** The Axum handler seamlessly calls `stealth::generate_stealth_address()` locally using the incoming recipient public key before passing the generated payload to Convex.
+
+### Why it was done
+- **Frontend Contract:** Provides the necessary REST layer for the frontend to negotiate secure payments without exposing any private key material.
+- **Atomicity:** Ensuring that paylinks and their generated stealth addresses are created transactionally prevents ghost records from failing operations.
+- **Robust Error Handling:** By replacing potential panics with `anyhow::Result` context mapping, the API server handles configuration issues (like malformed `FRONTEND_URL` environment variables) gracefully at startup.
+
+---
+
 *(This log will be continuously updated as subsequent phases are completed.)*

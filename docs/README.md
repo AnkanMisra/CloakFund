@@ -51,6 +51,34 @@ Verification:
 - Deterministic cryptographic vectors documented
 - Phase 0 and Phase 1 were re-reviewed before moving forward
 
+### Phase 2 — Deposit Watcher & Architecture Redesign
+Completed and reviewed.
+
+Delivered:
+- `docs/PHASE_2_ARCHITECTURE_REDESIGN.md`
+- `convex/` schema and backend TS functions
+- `rust-backend/src/watcher.rs`
+- `rust-backend/src/convex_client.rs`
+
+Implemented:
+- Pivot to Convex real-time database from Postgres
+- Rust RPC indexer using `ethers-rs`
+- Dedicated database schemas for checkpoints, paylinks, and deposits
+- Blockchain reorg handling and rate-limited historical catch-up
+
+### Phase 3 — Paylink API & Persistence
+Completed and reviewed.
+
+Delivered:
+- `rust-backend/src/api.rs`
+- `docs/API.md`
+
+Implemented:
+- Axum HTTP server setup
+- `POST /api/v1/paylink` with atomic Convex mutations
+- `GET /api/v1/paylink/:id` endpoint
+- End-to-end integration of stealth address generation with Convex persistence
+
 ---
 
 ## Key Features

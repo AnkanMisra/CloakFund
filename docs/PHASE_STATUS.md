@@ -12,11 +12,11 @@ This document tracks the implementation progress of CloakFund across all phases 
 
 ## Phase 2: Deposit Watcher / Indexer
 - **Status**: `done`
-- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented. Rust backend `models`, `config`, `convex_client`, and `watcher` (via `ethers-rs`) are implemented to subscribe to Base WSS and sync with Convex. Added ERC20 parsing and a demonstration script (`watcher_test.sh`). SSE/WebSocket push will be handled by Convex real-time subscriptions in Phase 4.
+- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented, including a dedicated `checkpoints` table for accurate watcher resumption. Rust backend `models`, `config`, `convex_client`, and `watcher` (via `ethers-rs`) are implemented to subscribe to Base WSS and sync with Convex. Added ERC20 parsing, reorg handling, rate-limited catch-up, and a demonstration script (`watcher_test.sh`). SSE/WebSocket push will be handled by Convex real-time subscriptions in Phase 4.
 
 ## Phase 3: Paylink API & Persistence
 - **Status**: `done`
-- **Notes**: Exposed `POST /api/v1/paylink` and `GET /api/v1/paylink/:id` using Axum and persisted mappings in the Convex database. Tested compilation and verified stealth integration with Convex data model.
+- **Notes**: Exposed `POST /api/v1/paylink` and `GET /api/v1/paylink/:id` using Axum and persisted mappings in the Convex database using an atomic `createWithEphemeralAddress` mutation to prevent orphaned paylinks. Tested compilation and verified stealth integration with Convex data model.
 
 ## Phase 4: Frontend Integration (Next.js TSX)
 - **Status**: `not_started`
