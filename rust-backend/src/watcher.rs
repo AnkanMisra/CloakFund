@@ -3,6 +3,7 @@ use ethers::prelude::*;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::config::WatcherConfig;
@@ -58,6 +59,9 @@ impl WatcherService {
                 if let Err(e) = self.process_block(&provider, block_num).await {
                     error!("Error processing historical block {}: {:?}", block_num, e);
                 }
+
+                // Add rate limiting for historical catchup
+                sleep(Duration::from_millis(50)).await;
             }
             if let Err(e) = self.update_confirmations(&provider, current_block).await {
                 error!("Error updating confirmations after catch-up: {:?}", e);
@@ -81,6 +85,16 @@ impl WatcherService {
                         "Error updating confirmations at block {}: {:?}",
                         block_number, e
                     );
+                }
+
+                let latest_confirmed =
+                    block_number.saturating_sub(self.config.required_confirmations);
+                if let Err(e) = self
+                    .convex
+                    .update_checkpoint(block_number, latest_confirmed)
+                    .await
+                {
+                    error!("Failed to update checkpoint: {:?}", e);
                 }
             }
         }
@@ -251,24 +265,41 @@ impl WatcherService {
             let confs = current_block.saturating_sub(deposit.block_number) + 1;
 
             // Check if tx is still in the same block (handle reorg)
-            if let Ok(Some(tx)) = provider
+            match provider
                 .get_transaction(
                     ethers::types::H256::from_str(&deposit.tx_hash).unwrap_or_default(),
                 )
                 .await
             {
-                if let Some(tx_block) = tx.block_number {
-                    if tx_block.as_u64() != deposit.block_number {
-                        warn!(
-                            "Transaction {} reorged to block {}",
-                            deposit.tx_hash, tx_block
-                        );
+                Ok(Some(tx)) => {
+                    if let Some(tx_block) = tx.block_number {
+                        if tx_block.as_u64() != deposit.block_number {
+                            warn!(
+                                "Transaction {} reorged to block {}",
+                                deposit.tx_hash, tx_block
+                            );
+                            let _ = self.convex.mark_deposit_reorged(&deposit.id).await;
+                            continue;
+                        }
+                    } else {
+                        warn!("Transaction {} reorged out of chain", deposit.tx_hash);
                         let _ = self.convex.mark_deposit_reorged(&deposit.id).await;
                         continue;
                     }
-                } else {
-                    warn!("Transaction {} reorged out of chain", deposit.tx_hash);
+                }
+                Ok(None) => {
+                    warn!(
+                        "Transaction {} not found, assuming reorged out of chain",
+                        deposit.tx_hash
+                    );
                     let _ = self.convex.mark_deposit_reorged(&deposit.id).await;
+                    continue;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to fetch transaction {} for confirmation check: {:?}",
+                        deposit.tx_hash, e
+                    );
                     continue;
                 }
             }

@@ -518,7 +518,15 @@ export const getDepositStatus = query({
 
       if (!isConfirmed) continue;
 
-      const amount = BigInt(deposit.amount);
+      let amount = 0n;
+      try {
+        amount = BigInt(deposit.amount);
+      } catch (e) {
+        console.error(
+          `Invalid amount for deposit ${deposit._id}: ${deposit.amount}`,
+        );
+        continue;
+      }
 
       if (deposit.assetType === "native") {
         nativeTotal += amount;
@@ -580,20 +588,48 @@ export const getLatestCheckpoint = query({
     }),
   ),
   handler: async (ctx) => {
-    const latestDeposit = await ctx.db
-      .query("deposits")
-      .withIndex("by_block_number")
-      .order("desc")
-      .first();
+    const checkpoint = await ctx.db.query("checkpoints").first();
 
-    if (!latestDeposit) {
+    if (!checkpoint) {
       return null;
     }
 
     return {
-      startBlock: latestDeposit.blockNumber,
-      latestProcessedBlock: latestDeposit.blockNumber,
-      latestConfirmedBlock: latestDeposit.blockNumber,
+      startBlock: checkpoint.startBlock,
+      latestProcessedBlock: checkpoint.latestProcessedBlock,
+      latestConfirmedBlock: checkpoint.latestConfirmedBlock,
     };
+  },
+});
+
+export const updateCheckpoint = mutation({
+  args: {
+    startBlock: v.optional(v.number()),
+    latestProcessedBlock: v.optional(v.number()),
+    latestConfirmedBlock: v.optional(v.number()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const checkpoint = await ctx.db.query("checkpoints").first();
+
+    if (checkpoint) {
+      await ctx.db.patch(checkpoint._id, {
+        ...(args.startBlock !== undefined && { startBlock: args.startBlock }),
+        ...(args.latestProcessedBlock !== undefined && {
+          latestProcessedBlock: args.latestProcessedBlock,
+        }),
+        ...(args.latestConfirmedBlock !== undefined && {
+          latestConfirmedBlock: args.latestConfirmedBlock,
+        }),
+      });
+    } else {
+      await ctx.db.insert("checkpoints", {
+        startBlock: args.startBlock ?? 0,
+        latestProcessedBlock: args.latestProcessedBlock,
+        latestConfirmedBlock: args.latestConfirmedBlock,
+      });
+    }
+
+    return null;
   },
 });

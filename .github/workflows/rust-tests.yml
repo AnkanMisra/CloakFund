@@ -4,11 +4,11 @@ on:
   push:
     branches:
       - main
-      - 'feature/*'
+      - "feature/*"
   pull_request:
     branches:
       - main
-      - 'feature/*'
+      - "feature/*"
 
 env:
   CARGO_TERM_COLOR: always

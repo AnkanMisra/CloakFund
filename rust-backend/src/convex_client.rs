@@ -293,6 +293,34 @@ impl ConvexRepository {
         }
     }
 
+    /// Updates the latest processed block checkpoint for the watcher.
+    pub async fn update_checkpoint(
+        &self,
+        latest_processed_block: u64,
+        latest_confirmed_block: u64,
+    ) -> Result<()> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "latestProcessedBlock".to_string(),
+            convex::Value::Float64(latest_processed_block as f64),
+        );
+        args.insert(
+            "latestConfirmedBlock".to_string(),
+            convex::Value::Float64(latest_confirmed_block as f64),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("deposits:updateCheckpoint", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(_) => Ok(()),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
     /// Fetches the latest processed block checkpoint for the watcher.
     pub async fn get_latest_checkpoint(&self) -> Result<Option<WatcherCheckpoint>> {
         let args = std::collections::BTreeMap::new();

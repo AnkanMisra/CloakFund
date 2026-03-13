@@ -101,4 +101,10 @@ export default defineSchema({
   })
     .index("by_deposit", ["depositId"])
     .index("by_status", ["status"]),
+
+  checkpoints: defineTable({
+    startBlock: v.number(),
+    latestProcessedBlock: v.optional(v.number()),
+    latestConfirmedBlock: v.optional(v.number()),
+  }),
 });
