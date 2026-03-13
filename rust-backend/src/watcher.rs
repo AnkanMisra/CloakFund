@@ -25,6 +25,14 @@ impl WatcherService {
 
     /// Start the watcher loop to listen for blockchain events
     pub async fn start(&self) -> Result<()> {
+        if let Err(e) = self.start_inner().await {
+            error!("Watcher service failed permanently: {}", e);
+            std::process::exit(1);
+        }
+        Ok(())
+    }
+
+    async fn start_inner(&self) -> Result<()> {
         info!(
             "Starting WatcherService on chain_id: {} (network: {})",
             self.config.chain_id, self.config.network
@@ -176,10 +184,13 @@ impl WatcherService {
                         let value = U256::from_big_endian(&log.data[0..32]);
 
                         if value > U256::zero() {
-                            let tx_hash_hex = log
-                                .transaction_hash
-                                .map(|h| format!("{:#x}", h))
-                                .unwrap_or_default();
+                            let tx_hash_hex = match log.transaction_hash {
+                                Some(h) => format!("{:#x}", h),
+                                None => {
+                                    warn!("Skipping ERC20 Transfer log with no transaction hash");
+                                    continue;
+                                }
+                            };
                             let token_address = format!("{:#x}", log.address);
 
                             let deposit = NewDeposit {

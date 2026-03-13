@@ -43,7 +43,10 @@ impl ConvexRepository {
         stealth_address: &str,
     ) -> Result<Option<DepositMatch>> {
         let mut args = std::collections::BTreeMap::new();
-        args.insert("chainId".to_string(), convex::Value::Int64(chain_id as i64));
+        args.insert(
+            "chainId".to_string(),
+            convex::Value::Float64(chain_id as f64),
+        );
         args.insert(
             "stealthAddress".to_string(),
             convex::Value::String(stealth_address.to_string()),
@@ -111,11 +114,11 @@ impl ConvexRepository {
         );
         args.insert(
             "confirmations".to_string(),
-            convex::Value::Int64(confirmations as i64),
+            convex::Value::Float64(confirmations as f64),
         );
         args.insert(
             "requiredConfirmations".to_string(),
-            convex::Value::Int64(required_confirmations as i64),
+            convex::Value::Float64(required_confirmations as f64),
         );
 
         let mut client = self.client.lock().await;
@@ -234,9 +237,7 @@ fn json_to_convex(json: serde_json::Value) -> convex::Value {
         serde_json::Value::Null => convex::Value::Null,
         serde_json::Value::Bool(b) => convex::Value::Boolean(b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                convex::Value::Int64(i)
-            } else if let Some(f) = n.as_f64() {
+            if let Some(f) = n.as_f64() {
                 convex::Value::Float64(f)
             } else {
                 convex::Value::Null

@@ -15,7 +15,7 @@ function normalizeAddress(value: string): string {
 function confirmationStatusFromCount(
   confirmations: number,
   requiredConfirmations: number,
-) {
+): "pending" | "confirmed" | "finalized" {
   if (confirmations < requiredConfirmations) return "pending";
   if (confirmations === requiredConfirmations) return "confirmed";
   return "finalized";
@@ -268,7 +268,12 @@ export const updateConfirmations = mutation({
       return {
         depositId: existing._id,
         confirmations: existing.confirmations,
-        confirmationStatus: existing.confirmationStatus as any,
+        confirmationStatus: existing.confirmationStatus as
+          | "pending"
+          | "confirmed"
+          | "finalized"
+          | "reorged"
+          | "failed",
         confirmedAt: existing.confirmedAt,
       };
     }
