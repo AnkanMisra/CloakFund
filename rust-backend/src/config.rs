@@ -230,7 +230,7 @@ mod tests {
             config.sweeper.treasury_address,
             "0x0000000000000000000000000000000000000000"
         );
-        assert_eq!(config.sweeper.dry_run, false);
+        assert!(!config.sweeper.dry_run);
         assert_eq!(config.sweeper.bitgo_base_url, "http://localhost:3080");
         assert_eq!(config.sweeper.bitgo_access_token, "test-token");
     }

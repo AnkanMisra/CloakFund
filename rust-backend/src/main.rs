@@ -68,10 +68,10 @@ async fn run_server() -> anyhow::Result<()> {
     let convex = Arc::new(ConvexRepository::new(&config.convex).await?);
 
     // WATCHER_START_BLOCK env var takes priority; only fall back to checkpoint
-    if config.watcher.start_block.is_some() {
+    if let Some(start_block) = config.watcher.start_block {
         info!(
             "WATCHER_START_BLOCK override: starting from block {}",
-            config.watcher.start_block.unwrap()
+            start_block
         );
     } else {
         info!("Fetching last watcher checkpoint...");
