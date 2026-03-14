@@ -12,7 +12,6 @@ use crate::convex_client::ConvexRepository;
 use crate::stealth;
 use std::env;
 use std::str::FromStr;
-use zeroize::{Zeroize, Zeroizing};
 
 /// Maximum number of retry attempts before giving up on a sweep job.
 const MAX_RETRY_ATTEMPTS: u32 = 5;
@@ -216,11 +215,11 @@ impl SweeperService {
                 job.id, job.ephemeral_pubkey_hex
             );
 
-            let ephem_priv_key_hex = match stealth::recover_stealth_private_key(
+            let recovered_key = match stealth::recover_stealth_private_key(
                 &recipient_priv_hex,
                 &job.ephemeral_pubkey_hex,
             ) {
-                Ok(key) => Zeroizing::new(key),
+                Ok(key) => key,
                 Err(e) => {
                     error!(
                         "Failed to recover stealth private key for job {}: {}",
@@ -235,24 +234,7 @@ impl SweeperService {
                 }
             };
 
-            let mut ephem_priv_key = [0u8; 32];
-            match hex::decode(ephem_priv_key_hex.trim_start_matches("0x")) {
-                Ok(bytes) if bytes.len() == 32 => {
-                    ephem_priv_key.copy_from_slice(&bytes);
-                }
-                _ => {
-                    error!("Invalid recovered private key format for job {}", job.id);
-                    let _ = self
-                        .convex
-                        .update_sweep_job_status(&job.id, "failed", None, None)
-                        .await;
-                    self.retry_counts.remove(&job.id);
-                    continue;
-                }
-            }
-
-            let ephemeral_key = EphemeralPrivateKey(ephem_priv_key);
-            ephem_priv_key.zeroize();
+            let ephemeral_key = EphemeralPrivateKey(*recovered_key);
 
             // ── Generate Dynamic BitGo Deposit Address ─────────────────
             info!(
@@ -361,13 +343,14 @@ impl SweeperService {
                 }
                 Ok(SweepOutcome::SkippedZeroBalance) => {
                     warn!(
-                        "⚠️ Skipped sweep job {} due to zero balance; returning to queued",
+                        "⚠️ Skipped sweep job {} due to zero balance; marking failed",
                         job.id
                     );
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "queued", None, None)
+                        .update_sweep_job_status(&job.id, "failed", None, None)
                         .await;
+                    self.retry_counts.remove(&job.id);
                 }
                 Ok(SweepOutcome::SkippedDust {
                     balance,

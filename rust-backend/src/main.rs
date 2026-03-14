@@ -53,7 +53,7 @@ async fn main() {
                 return;
             }
             match stealth::recover_stealth_private_key(&args[2], &args[3]) {
-                Ok(priv_key) => println!("Stealth Private Key: {}", priv_key),
+                Ok(priv_key) => println!("Stealth Private Key: 0x{}", hex::encode(*priv_key)),
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
