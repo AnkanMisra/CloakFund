@@ -379,7 +379,7 @@ pub struct DepositStatusApiResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreatePaylinkRequest {
     pub ens_name: Option<String>,
-    pub recipient_public_key_hex: String,
+    pub recipient_public_key_hex: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub chain_id: Option<u64>,
     pub network: Option<String>,
@@ -535,10 +535,10 @@ mod tests {
     fn test_create_paylink_request_serialization() {
         let req = CreatePaylinkRequest {
             ens_name: Some("alice.eth".to_string()),
-            recipient_public_key_hex: "0x123".to_string(),
-            metadata: Some(serde_json::json!({"item": "coffee"})),
-            chain_id: Some(8453),
-            network: Some("base".to_string()),
+            recipient_public_key_hex: Some("0x123".to_string()),
+            metadata: None,
+            chain_id: Some(1),
+            network: Some("mainnet".to_string()),
         };
 
         let json = serde_json::to_string(&req).unwrap();

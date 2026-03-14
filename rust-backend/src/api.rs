@@ -12,6 +12,9 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::convex_client::ConvexRepository;
 
+#[path = "ccip.rs"]
+pub mod ccip;
+
 pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -27,6 +30,7 @@ pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
 
     Ok(Router::new()
         .route("/health", get(health_check))
+        .route("/gateway/:sender/:data", get(ccip::ccip_resolve))
         .route("/api/v1/paylink", post(create_paylink))
         .route("/api/v1/paylink/:id", get(get_paylink))
         .route("/api/v1/consolidate", post(consolidate_funds))
@@ -45,6 +49,23 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
+async fn resolve_ens_pubkey(ens_name: &str) -> anyhow::Result<String> {
+    use ethers::prelude::*;
+
+    let rpc_url = std::env::var("ETH_MAINNET_RPC_URL")
+        .unwrap_or_else(|_| "https://eth.llamarpc.com".to_string());
+
+    let provider = Provider::<Http>::try_from(rpc_url)?;
+
+    let pubkey = provider.resolve_field(ens_name, "cloak.pubkey").await?;
+
+    if pubkey.is_empty() {
+        anyhow::bail!("No cloak.pubkey text record found");
+    }
+
+    Ok(pubkey)
+}
+
 async fn create_paylink(
     State(state): State<Arc<ConvexRepository>>,
     Json(payload): Json<crate::models::CreatePaylinkRequest>,
@@ -52,8 +73,32 @@ async fn create_paylink(
     let chain_id = payload.chain_id.unwrap_or(8453); // Default base
     let network = payload.network.unwrap_or_else(|| "base".to_string());
 
+    let recipient_pubkey = match payload.recipient_public_key_hex {
+        Some(key) => key,
+        None => {
+            if let Some(ens_name) = &payload.ens_name {
+                match resolve_ens_pubkey(ens_name).await {
+                    Ok(key) => key,
+                    Err(e) => {
+                        return (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "error": format!("Failed to resolve ENS public key for {}: {}", ens_name, e) })),
+                        )
+                            .into_response();
+                    }
+                }
+            } else {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": "Either recipient_public_key_hex or ens_name must be provided" })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
     let (stealth_address, ephemeral_pubkey_hex, view_tag) =
-        match crate::stealth::generate_stealth_address(&payload.recipient_public_key_hex) {
+        match crate::stealth::generate_stealth_address(&recipient_pubkey) {
             Ok(res) => res,
             Err(e) => {
                 return (
@@ -67,7 +112,7 @@ async fn create_paylink(
     let new_paylink = crate::models::NewPaylinkWithAddress {
         user_id: None,
         ens_name: payload.ens_name,
-        recipient_public_key_hex: payload.recipient_public_key_hex,
+        recipient_public_key_hex: recipient_pubkey,
         metadata: payload.metadata,
         chain_id,
         network: network.clone(),

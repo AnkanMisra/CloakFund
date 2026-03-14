@@ -14,6 +14,7 @@ pub struct AppConfig {
 pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub frontend_url: String,
+    pub eth_mainnet_rpc_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -78,9 +79,13 @@ impl ServerConfig {
         let frontend_url =
             env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
+        let eth_mainnet_rpc_url = env::var("ETH_MAINNET_RPC_URL")
+            .unwrap_or_else(|_| "https://eth.llamarpc.com".to_string());
+
         Ok(Self {
             bind_addr,
             frontend_url,
+            eth_mainnet_rpc_url,
         })
     }
 }
@@ -188,6 +193,7 @@ mod tests {
             "HOST",
             "PORT",
             "FRONTEND_URL",
+            "ETH_MAINNET_RPC_URL",
             "BASE_RPC_URL",
             "BASE_WSS_URL",
             "BASE_CHAIN_ID",
@@ -226,6 +232,10 @@ mod tests {
 
         assert_eq!(config.server.bind_addr, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(config.server.frontend_url, "http://localhost:3000");
+        assert_eq!(
+            config.server.eth_mainnet_rpc_url,
+            "https://eth.llamarpc.com"
+        );
         assert_eq!(config.watcher.chain_id, 8453);
         assert_eq!(config.watcher.network, "base");
         assert_eq!(config.watcher.required_confirmations, 6);
