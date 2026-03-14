@@ -28,8 +28,9 @@ echo "Terminal 2: cd rust-backend && cargo run -- serve"
 echo ""
 
 echo "1. Creating a new Paylink via Rust API..."
-# Fixed dummy public key for secp256k1 (compressed) so derivation doesn't error
-MOCK_PUB="0x034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
+# We must use Wallet 2's uncompressed public key so the Stealth Address math
+# aligns perfectly with Ethereum ECDSA derivation logic on the backend!
+MOCK_PUB="0x04b10912af0c04aa473bebc86f36f44eed2bbbc6bcad611287140975fafe159974b8ac6bccd806e4647e45eda540d9ae05aed61ebff5d0bff409e813d2ad33d7f6"
 
 PAYLINK_RES=$(curl -s -X POST http://localhost:8080/api/v1/paylink \
     -H "Content-Type: application/json" \

@@ -94,7 +94,7 @@ pub struct PaylinkRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub user_id: Option<String>,
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
@@ -110,7 +110,7 @@ pub struct EphemeralAddressRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub paylink_id: String,
     pub stealth_address: String,
     pub ephemeral_pubkey_hex: String,
@@ -126,7 +126,7 @@ pub struct DepositRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub paylink_id: String,
     pub ephemeral_address_id: String,
     pub tx_hash: String,
@@ -405,7 +405,7 @@ pub struct UserRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub wallet_address: String,
     pub ens_name: Option<String>,
     pub public_key_hex: String,
@@ -417,7 +417,7 @@ pub struct ReceiptRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub deposit_id: String,
     pub encrypted_payload: String,
     pub fileverse_pointer: Option<String>,
@@ -429,7 +429,7 @@ pub struct SweepJobRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub deposit_id: String,
     pub status: String,
     pub sweep_tx_hash: Option<String>,
@@ -494,7 +494,7 @@ mod tests {
     fn deposit_record_confirmation_helpers_work() {
         let confirmed = DepositRecord {
             id: "dep1".into(),
-            creation_time: 1,
+            creation_time: 1.0,
             paylink_id: "pay1".into(),
             ephemeral_address_id: "ephem1".into(),
             tx_hash: "0xabc".into(),
