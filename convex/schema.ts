@@ -98,6 +98,7 @@ export default defineSchema({
       v.literal("failed"),
     ),
     sweepTxHash: v.optional(v.string()),
+    destinationAddress: v.optional(v.string()),
   })
     .index("by_deposit", ["depositId"])
     .index("by_status", ["status"]),

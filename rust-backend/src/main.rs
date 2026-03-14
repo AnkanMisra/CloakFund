@@ -9,10 +9,10 @@ use tracing::{error, info};
 #[tokio::main]
 async fn main() {
     // Load environment variables from .env or .env.local files
-    let _ = dotenvy::dotenv();
-    let _ = dotenvy::from_filename(".env.local");
-    let _ = dotenvy::from_filename("../.env.local");
     let _ = dotenvy::from_filename("../.env");
+    let _ = dotenvy::dotenv();
+    let _ = dotenvy::from_filename("../.env.local");
+    let _ = dotenvy::from_filename(".env.local");
 
     tracing_subscriber::fmt::init();
 

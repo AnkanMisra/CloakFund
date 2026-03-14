@@ -37,10 +37,11 @@ pub struct ConvexClientConfig {
 
 #[derive(Debug, Clone)]
 pub struct SweeperConfig {
-    pub treasury_address: String,
     pub dry_run: bool,
     pub bitgo_base_url: String,
     pub bitgo_access_token: String,
+    pub bitgo_wallet_id: String,
+    pub bitgo_coin: String,
 }
 
 #[derive(Debug, Error)]
@@ -111,17 +112,25 @@ impl ConvexClientConfig {
 impl SweeperConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
-            treasury_address: required_env("TREASURY_ADDRESS")?,
             dry_run: parse_env_or_default("SWEEPER_DRY_RUN", false)?,
             bitgo_base_url: env::var("BITGO_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:3080".to_string()),
+                .unwrap_or_else(|_| "http://localhost:3080".to_string())
+                .trim()
+                .to_string(),
             bitgo_access_token: required_env("BITGO_ACCESS_TOKEN")?,
+            bitgo_wallet_id: required_env("BITGO_WALLET_ID")?,
+            bitgo_coin: env::var("BITGO_COIN")
+                .unwrap_or_else(|_| "gteth".to_string())
+                .trim()
+                .to_string(),
         })
     }
 }
 
 fn required_env(name: &'static str) -> Result<String, ConfigError> {
-    env::var(name).map_err(|_| ConfigError::MissingVar(name))
+    env::var(name)
+        .map(|v| v.trim().to_string())
+        .map_err(|_| ConfigError::MissingVar(name))
 }
 
 fn optional_env(name: &'static str) -> Option<String> {
@@ -189,10 +198,11 @@ mod tests {
             "CONVEX_URL",
             "CONVEX_SITE_URL",
             "CONVEX_ADMIN_KEY",
-            "TREASURY_ADDRESS",
             "SWEEPER_DRY_RUN",
             "BITGO_BASE_URL",
             "BITGO_ACCESS_TOKEN",
+            "BITGO_WALLET_ID",
+            "BITGO_COIN",
         ] {
             unsafe { env::remove_var(key) };
         }
@@ -207,11 +217,9 @@ mod tests {
             env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
             env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
-            env::set_var(
-                "TREASURY_ADDRESS",
-                "0x0000000000000000000000000000000000000000",
-            );
             env::set_var("BITGO_ACCESS_TOKEN", "test-token");
+            env::set_var("BITGO_WALLET_ID", "test-wallet-id");
+            env::set_var("BITGO_COIN", "gteth");
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -226,13 +234,11 @@ mod tests {
         assert_eq!(config.convex.deployment_url, "https://example.convex.cloud");
         assert_eq!(config.convex.site_url, None);
         assert_eq!(config.convex.admin_key, None);
-        assert_eq!(
-            config.sweeper.treasury_address,
-            "0x0000000000000000000000000000000000000000"
-        );
         assert!(!config.sweeper.dry_run);
         assert_eq!(config.sweeper.bitgo_base_url, "http://localhost:3080");
         assert_eq!(config.sweeper.bitgo_access_token, "test-token");
+        assert_eq!(config.sweeper.bitgo_wallet_id, "test-wallet-id");
+        assert_eq!(config.sweeper.bitgo_coin, "gteth");
     }
 
     #[test]
@@ -258,11 +264,8 @@ mod tests {
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
             env::set_var("CONVEX_SITE_URL", "https://example.convex.site");
             env::set_var("CONVEX_ADMIN_KEY", "test-admin-key");
-            env::set_var(
-                "TREASURY_ADDRESS",
-                "0x1234567890123456789012345678901234567890",
-            );
             env::set_var("BITGO_ACCESS_TOKEN", "test-token");
+            env::set_var("BITGO_WALLET_ID", "test-wallet-id-2");
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -275,9 +278,6 @@ mod tests {
             Some("https://example.convex.site")
         );
         assert_eq!(config.convex.admin_key.as_deref(), Some("test-admin-key"));
-        assert_eq!(
-            config.sweeper.treasury_address,
-            "0x1234567890123456789012345678901234567890"
-        );
+        assert_eq!(config.sweeper.bitgo_wallet_id, "test-wallet-id-2");
     }
 }

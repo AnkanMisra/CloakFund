@@ -15,6 +15,7 @@ export const getPendingSweepJobs = query({
         v.literal("failed"),
       ),
       sweepTxHash: v.optional(v.string()),
+      destinationAddress: v.optional(v.string()),
       stealthAddress: v.string(),
       ephemeralPubkeyHex: v.string(),
       amount: v.string(),
@@ -60,6 +61,7 @@ export const updateSweepJobStatus = mutation({
       v.literal("failed"),
     ),
     sweepTxHash: v.optional(v.string()),
+    destinationAddress: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -71,6 +73,9 @@ export const updateSweepJobStatus = mutation({
     const updateFields: any = { status: args.status };
     if (args.sweepTxHash !== undefined) {
       updateFields.sweepTxHash = args.sweepTxHash;
+    }
+    if (args.destinationAddress !== undefined) {
+      updateFields.destinationAddress = args.destinationAddress;
     }
 
     await ctx.db.patch(args.jobId, updateFields);
@@ -138,6 +143,7 @@ export const getAllSweepJobs = query({
         v.literal("failed"),
       ),
       sweepTxHash: v.optional(v.string()),
+      destinationAddress: v.optional(v.string()),
     }),
   ),
   handler: async (ctx) => {

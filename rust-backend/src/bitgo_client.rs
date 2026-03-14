@@ -18,6 +18,12 @@ pub struct SweepResponse {
     pub status: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAddressResponse {
+    pub address: String,
+}
+
 /// A client for interacting with the BitGo Express API.
 #[derive(Debug, Clone)]
 pub struct BitGoClient {
@@ -75,6 +81,45 @@ impl BitGoClient {
             .json()
             .await
             .context("Failed to parse BitGo sweep response")?;
+
+        Ok(parsed)
+    }
+
+    /// Creates a new receive address for a given wallet.
+    /// POST /api/v2/{coin}/wallet/{walletId}/address
+    pub async fn create_address(
+        &self,
+        coin: &str,
+        wallet_id: &str,
+    ) -> Result<CreateAddressResponse> {
+        let url = format!(
+            "{}/api/v2/{}/wallet/{}/address",
+            self.base_url.trim_end_matches('/'),
+            coin,
+            wallet_id
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .context("Failed to send create address request to BitGo API")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            anyhow::bail!("BitGo API error ({}): {}", status, text);
+        }
+
+        let parsed: CreateAddressResponse = response
+            .json()
+            .await
+            .context("Failed to parse BitGo create address response")?;
 
         Ok(parsed)
     }

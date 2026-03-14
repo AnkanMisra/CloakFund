@@ -31,34 +31,65 @@ echo "👉 $STEALTH_ADDR"
 echo "========================================="
 
 echo "Sending 0.0001 testnet ETH to the temporary wallet to simulate a payment..."
-# We run the send_eth script to simulate the sender
-node scripts/send_eth.mjs "$STEALTH_ADDR" 0.0001
-echo ""
-echo "Waiting for the CloakFund Agent to detect the payment and automatically trigger the sweep to your main wallet..."
-echo "(This acts like an automated smart contract to protect your privacy. Waiting for 2 block confirmations...)"
+SEND_OUT=$(node scripts/send_eth.mjs "$STEALTH_ADDR" 0.0001)
 
-# Watch for funds and auto-sweep
+# Extract tx hash printed by scripts/send_eth.mjs
+TX_HASH=$(echo "$SEND_OUT" | grep -Eo '0x[a-fA-F0-9]{64}' | head -n 1)
+
+echo "$SEND_OUT"
+echo ""
+
+if [ -z "$TX_HASH" ]; then
+    echo "❌ Could not extract tx hash from send output. Cannot proceed with tx-hash polling."
+    exit 1
+fi
+
+echo "Waiting for the CloakFund Agent to detect the payment..."
+echo "Polling deposits by tx hash (more reliable than paylink polling): $TX_HASH"
+echo "(This avoids missing deposits if paylink-based polling lags.)"
+
 ATTEMPTS=0
-while [ $ATTEMPTS -lt 60 ]; do
+DEPOSIT_ID=""
+while [ $ATTEMPTS -lt 80 ]; do
     sleep 3
     ATTEMPTS=$((ATTEMPTS + 1))
-    STATUS_OUT=$(npx convex run deposits:getDepositStatus '{"paylinkId": "'$PAYLINK_ID'"}' --no-color 2>/dev/null || echo "")
-    DEPOSIT_ID=$(echo "$STATUS_OUT" | grep -o 'depositId: "[^"]*' | cut -d'"' -f2 | head -n 1)
+
+    # Query deposits by tx hash (requires convex query: deposits:getDepositsByTxHash)
+    TX_OUT=$(npx convex run deposits:getDepositsByTxHash '{"txHash": "'$TX_HASH'"}' --no-color 2>/dev/null || echo "")
+
+    # First depositId in the array (Convex prints as `depositId: "..."`)
+    DEPOSIT_ID=$(echo "$TX_OUT" | grep -o 'depositId: "[^"]*' | cut -d'"' -f2 | head -n 1)
 
     if [ -n "$DEPOSIT_ID" ]; then
-        echo "🎉 PAYMENT DETECTED AND CONFIRMED! Deposit ID: $DEPOSIT_ID"
-        echo "🤖 Auto-Sweeper (Off-Chain Smart Contract Agent) is now transferring funds to your main wallet..."
-        
-        # Trigger the sweeper automatically
-        SWEEP_RES=$(curl -s -X POST http://localhost:8080/api/v1/consolidate -H "Content-Type: application/json" -d '{"deposit_id": "'$DEPOSIT_ID'"}')
-        JOB_ID=$(echo "$SWEEP_RES" | grep -o '"job_id":"[^"]*' | cut -d'"' -f4)
-        
-        echo "✅ Transfer Job Initiated! Job ID: $JOB_ID"
-        echo "Check your Rust backend terminal for the final transaction hash."
-        exit 0
+        echo ""
+        echo "🎉 Deposit recorded! Deposit ID: $DEPOSIT_ID"
+        break
     fi
+
     echo -n "."
 done
 
-echo ""
-echo "❌ Timed out waiting for deposit. Check your internet connection or the Rust backend logs."
+if [ -z "$DEPOSIT_ID" ]; then
+    echo ""
+    echo "❌ Timed out waiting for deposit to appear in Convex for tx hash: $TX_HASH"
+    echo "   Check Rust watcher logs and Convex dev output."
+    exit 1
+fi
+
+echo "🤖 Initializing sweep (temporary → BitGo dynamic deposit address)..."
+SWEEP_RES=$(curl -s -X POST http://localhost:8080/api/v1/consolidate \
+    -H "Content-Type: application/json" \
+    -d '{"deposit_id": "'$DEPOSIT_ID'"}')
+
+JOB_ID=$(echo "$SWEEP_RES" | grep -o '"job_id":"[^"]*' | cut -d'"' -f4)
+
+if [ -z "$JOB_ID" ] || [ "$JOB_ID" == "null" ]; then
+    echo "❌ Failed to queue sweep job. Response:"
+    echo "$SWEEP_RES"
+    exit 1
+fi
+
+echo "✅ Sweep Job Initiated! Job ID: $JOB_ID"
+echo "Check your Rust backend terminal for:"
+echo "  - Generated BitGo destination address"
+echo "  - Sweep tx hash"

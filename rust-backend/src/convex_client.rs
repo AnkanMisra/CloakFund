@@ -420,6 +420,7 @@ impl ConvexRepository {
         job_id: &str,
         status: &str,
         sweep_tx_hash: Option<String>,
+        destination_address: Option<String>,
     ) -> Result<()> {
         let mut args = std::collections::BTreeMap::new();
         args.insert(
@@ -432,6 +433,12 @@ impl ConvexRepository {
         );
         if let Some(hash) = sweep_tx_hash {
             args.insert("sweepTxHash".to_string(), convex::Value::String(hash));
+        }
+        if let Some(addr) = destination_address {
+            args.insert(
+                "destinationAddress".to_string(),
+                convex::Value::String(addr),
+            );
         }
 
         let mut client = self.client.lock().await;

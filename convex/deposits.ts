@@ -1,6 +1,67 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+/**
+ * Lookup deposits by transaction hash.
+ * Useful for terminal-only flows (CLI) and debugging when paylink-based polling fails.
+ */
+export const getDepositsByTxHash = query({
+  args: {
+    txHash: v.string(),
+  },
+  returns: v.array(
+    v.object({
+      depositId: v.id("deposits"),
+      paylinkId: v.id("paylinks"),
+      ephemeralAddressId: v.id("ephemeralAddresses"),
+      txHash: v.string(),
+      logIndex: v.optional(v.number()),
+      blockNumber: v.number(),
+      blockHash: v.optional(v.string()),
+      fromAddress: v.string(),
+      toAddress: v.string(),
+      assetType: v.string(),
+      tokenAddress: v.optional(v.string()),
+      amount: v.string(),
+      decimals: v.optional(v.number()),
+      symbol: v.optional(v.string()),
+      confirmations: v.number(),
+      confirmationStatus: v.string(),
+      detectedAt: v.number(),
+      confirmedAt: v.optional(v.number()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const normalizedTxHash = normalizeHex(args.txHash);
+
+    const deposits = await ctx.db
+      .query("deposits")
+      .withIndex("by_tx_hash", (q) => q.eq("txHash", normalizedTxHash))
+      .collect();
+
+    return deposits.map((d) => ({
+      depositId: d._id,
+      paylinkId: d.paylinkId,
+      ephemeralAddressId: d.ephemeralAddressId,
+      txHash: d.txHash,
+      logIndex: d.logIndex,
+      blockNumber: d.blockNumber,
+      blockHash: d.blockHash,
+      fromAddress: d.fromAddress,
+      toAddress: d.toAddress,
+      assetType: d.assetType,
+      tokenAddress: d.tokenAddress,
+      amount: d.amount,
+      decimals: d.decimals,
+      symbol: d.symbol,
+      confirmations: d.confirmations,
+      confirmationStatus: d.confirmationStatus,
+      detectedAt: d.detectedAt,
+      confirmedAt: d.confirmedAt,
+    }));
+  },
+});
+
 function normalizeHex(value: string): string {
   const trimmed = value.trim();
   return trimmed.startsWith("0x") || trimmed.startsWith("0X")

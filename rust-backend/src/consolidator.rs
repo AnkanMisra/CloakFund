@@ -24,22 +24,15 @@ pub enum SweepOutcome {
 /// (used by the sweeper) and `Provider<Ws>` (used by the watcher).
 pub struct Consolidator<P: JsonRpcClient> {
     provider: Arc<Provider<P>>,
-    treasury_address: Address,
     dry_run: bool,
     chain_id: u64,
 }
 
 impl<P: JsonRpcClient + 'static> Consolidator<P> {
     /// Creates a new Consolidator instance.
-    pub fn new(
-        provider: Arc<Provider<P>>,
-        treasury_address: Address,
-        dry_run: bool,
-        chain_id: u64,
-    ) -> Self {
+    pub fn new(provider: Arc<Provider<P>>, dry_run: bool, chain_id: u64) -> Self {
         Self {
             provider,
-            treasury_address,
             dry_run,
             chain_id,
         }
@@ -60,6 +53,7 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
         &self,
         ephemeral_key: EphemeralPrivateKey,
         from_address: Address,
+        destination_address: Address,
     ) -> Result<SweepOutcome> {
         let wallet = LocalWallet::from_bytes(&ephemeral_key.0)
             .context("Failed to construct wallet from ephemeral private key")?
@@ -104,12 +98,10 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
             .context("Failed to fetch latest block")?
             .context("Latest block not found")?;
 
-        let base_fee = latest_block
-            .base_fee_per_gas
-            .unwrap_or_else(|| {
-                warn!("Block has no base_fee_per_gas, falling back to 1 gwei");
-                U256::from(1_000_000_000) // 1 gwei fallback
-            });
+        let base_fee = latest_block.base_fee_per_gas.unwrap_or_else(|| {
+            warn!("Block has no base_fee_per_gas, falling back to 1 gwei");
+            U256::from(1_000_000_000) // 1 gwei fallback
+        });
 
         // Fetch the network's suggested priority fee
         let priority_fee: U256 = self
@@ -166,12 +158,12 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
 
         info!(
             "Sweep plan: {:?} → {:?} | amount={} wei | gas_reserved={} wei",
-            from_address, self.treasury_address, sweep_amount, total_gas_reservation
+            from_address, destination_address, sweep_amount, total_gas_reservation
         );
 
         // ── Step 8: Build EIP-1559 transaction ─────────────────────────────
         let tx = Eip1559TransactionRequest::new()
-            .to(self.treasury_address)
+            .to(destination_address)
             .value(sweep_amount)
             .gas(gas_limit)
             .max_fee_per_gas(max_fee_per_gas)
@@ -180,13 +172,13 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
 
         debug!(
             "Built EIP-1559 tx: to={:?}, value={}, gas={}, max_fee={}, max_priority_fee={}",
-            self.treasury_address, sweep_amount, gas_limit, max_fee_per_gas, max_priority_fee_per_gas
+            destination_address, sweep_amount, gas_limit, max_fee_per_gas, max_priority_fee_per_gas
         );
 
         if self.dry_run {
             info!(
                 "DRY RUN: Skipping broadcast for {:?} (would sweep {} wei to {:?})",
-                from_address, sweep_amount, self.treasury_address
+                from_address, sweep_amount, destination_address
             );
             return Ok(SweepOutcome::SkippedDryRun);
         }
@@ -217,7 +209,7 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
         let tx_hash = pending_tx.tx_hash();
         info!(
             "✅ Broadcasted EIP-1559 sweep tx {:#x} from {:?} ({} wei → {:?})",
-            tx_hash, from_address, sweep_amount, self.treasury_address
+            tx_hash, from_address, sweep_amount, destination_address
         );
 
         Ok(SweepOutcome::Success(tx_hash))
@@ -229,6 +221,7 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
         _ephemeral_key: EphemeralPrivateKey,
         _from_address: Address,
         _token_address: Address,
+        _destination_address: Address,
     ) -> Result<SweepOutcome> {
         warn!("ERC20 sweeping not yet implemented.");
         Ok(SweepOutcome::SkippedZeroBalance) // Placeholder

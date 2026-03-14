@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
+use crate::bitgo_client::BitGoClient;
 use crate::config::{SweeperConfig, WatcherConfig};
 use crate::consolidator::{Consolidator, EphemeralPrivateKey, SweepOutcome};
 use crate::convex_client::ConvexRepository;
@@ -50,14 +51,21 @@ impl SweeperService {
         let sweeper_config = SweeperConfig::from_env().context("Failed to load sweeper config")?;
 
         info!(
-            "Sweeper config: treasury={}, dry_run={}",
-            sweeper_config.treasury_address, sweeper_config.dry_run
+            "Sweeper config: bitgo_url={}, bitgo_coin={}, bitgo_wallet={}, token={}…, dry_run={}",
+            sweeper_config.bitgo_base_url,
+            sweeper_config.bitgo_coin,
+            sweeper_config.bitgo_wallet_id,
+            &sweeper_config.bitgo_access_token[..sweeper_config.bitgo_access_token.len().min(8)],
+            sweeper_config.dry_run
         );
 
         // On startup, reset any jobs stuck in "broadcasting" from a previous crash.
         match self.convex.reset_stuck_sweep_jobs().await {
             Ok(0) => debug!("No stuck sweep jobs found."),
-            Ok(count) => info!("♻️ Reset {} stuck 'broadcasting' job(s) back to 'queued'", count),
+            Ok(count) => info!(
+                "♻️ Reset {} stuck 'broadcasting' job(s) back to 'queued'",
+                count
+            ),
             Err(e) => warn!("Failed to reset stuck sweep jobs: {:?}", e),
         }
 
@@ -73,7 +81,10 @@ impl SweeperService {
                 }
             };
 
-            info!("Sweeper connected to HTTP RPC: {}", self.config.base_rpc_url);
+            info!(
+                "Sweeper connected to HTTP RPC: {}",
+                self.config.base_rpc_url
+            );
 
             if let Err(e) = self.sweep_loop(&provider, &sweeper_config).await {
                 error!("Sweeper loop error: {:?}. Restarting in 10s...", e);
@@ -117,14 +128,15 @@ impl SweeperService {
 
         info!("Found {} pending sweep job(s)", jobs.len());
 
-        let treasury_addr = Address::from_str(&sweeper_config.treasury_address)
-            .context("Invalid treasury address format")?;
-
         let consolidator = Consolidator::new(
             provider.clone(),
-            treasury_addr,
             sweeper_config.dry_run,
             self.config.chain_id,
+        );
+
+        let bitgo_client = BitGoClient::new(
+            sweeper_config.bitgo_base_url.clone(),
+            sweeper_config.bitgo_access_token.clone(),
         );
 
         let recipient_priv_hex = env::var("RECIPIENT_PRIVATE_KEY_HEX").unwrap_or_default();
@@ -144,7 +156,7 @@ impl SweeperService {
                 );
                 let _ = self
                     .convex
-                    .update_sweep_job_status(&job.id, "failed", None)
+                    .update_sweep_job_status(&job.id, "failed", None, None)
                     .await;
                 self.retry_counts.remove(&job.id);
                 continue;
@@ -164,13 +176,17 @@ impl SweeperService {
 
             info!(
                 "Processing sweep job: {} (stealth={}, asset={}, amount={}, attempt={})",
-                job.id, job.stealth_address, job.asset_type, job.amount, attempt + 1
+                job.id,
+                job.stealth_address,
+                job.asset_type,
+                job.amount,
+                attempt + 1
             );
 
             // ── Transition: queued → processing ────────────────────────
             if let Err(e) = self
                 .convex
-                .update_sweep_job_status(&job.id, "broadcasting", None)
+                .update_sweep_job_status(&job.id, "broadcasting", None, None)
                 .await
             {
                 error!(
@@ -187,7 +203,7 @@ impl SweeperService {
                     error!("Invalid stealth address for job {}: {}", job.id, e);
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "failed", None)
+                        .update_sweep_job_status(&job.id, "failed", None, None)
                         .await;
                     self.retry_counts.remove(&job.id);
                     continue;
@@ -212,7 +228,7 @@ impl SweeperService {
                     );
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "failed", None)
+                        .update_sweep_job_status(&job.id, "failed", None, None)
                         .await;
                     self.retry_counts.remove(&job.id);
                     continue;
@@ -228,7 +244,7 @@ impl SweeperService {
                     error!("Invalid recovered private key format for job {}", job.id);
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "failed", None)
+                        .update_sweep_job_status(&job.id, "failed", None, None)
                         .await;
                     self.retry_counts.remove(&job.id);
                     continue;
@@ -238,15 +254,56 @@ impl SweeperService {
             let ephemeral_key = EphemeralPrivateKey(ephem_priv_key);
             ephem_priv_key.zeroize();
 
+            // ── Generate Dynamic BitGo Deposit Address ─────────────────
             info!(
-                "Executing EIP-1559 sweep: {} → treasury {:?} (dry_run={})",
-                job.stealth_address, treasury_addr, sweeper_config.dry_run
+                "Generating dynamic BitGo deposit address for job {}...",
+                job.id
+            );
+
+            let new_address_res = match bitgo_client
+                .create_address(&sweeper_config.bitgo_coin, &sweeper_config.bitgo_wallet_id)
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    error!(
+                        "Failed to generate BitGo address for job {}: {:?}",
+                        job.id, e
+                    );
+                    let _ = self
+                        .convex
+                        .update_sweep_job_status(&job.id, "failed", None, None)
+                        .await;
+                    self.retry_counts.remove(&job.id);
+                    continue;
+                }
+            };
+
+            let destination_address = match Address::from_str(&new_address_res.address) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    error!(
+                        "Invalid BitGo generated address {} for job {}: {:?}",
+                        new_address_res.address, job.id, e
+                    );
+                    let _ = self
+                        .convex
+                        .update_sweep_job_status(&job.id, "failed", None, None)
+                        .await;
+                    self.retry_counts.remove(&job.id);
+                    continue;
+                }
+            };
+
+            info!(
+                "Executing EIP-1559 sweep: {} → dynamic destination {:?} (dry_run={})",
+                job.stealth_address, destination_address, sweeper_config.dry_run
             );
 
             // ── Execute sweep ──────────────────────────────────────────
             let sweep_result = if job.asset_type == "native" {
                 consolidator
-                    .sweep_native(ephemeral_key, stealth_address)
+                    .sweep_native(ephemeral_key, stealth_address, destination_address)
                     .await
             } else if job.asset_type == "erc20" {
                 let token_address = match job.token_address.as_deref().map(Address::from_str) {
@@ -258,20 +315,25 @@ impl SweeperService {
                         );
                         let _ = self
                             .convex
-                            .update_sweep_job_status(&job.id, "failed", None)
+                            .update_sweep_job_status(&job.id, "failed", None, None)
                             .await;
                         self.retry_counts.remove(&job.id);
                         continue;
                     }
                 };
                 consolidator
-                    .sweep_erc20(ephemeral_key, stealth_address, token_address)
+                    .sweep_erc20(
+                        ephemeral_key,
+                        stealth_address,
+                        token_address,
+                        destination_address,
+                    )
                     .await
             } else {
                 error!("Unknown asset type {} for job {}", job.asset_type, job.id);
                 let _ = self
                     .convex
-                    .update_sweep_job_status(&job.id, "failed", None)
+                    .update_sweep_job_status(&job.id, "failed", None, None)
                     .await;
                 self.retry_counts.remove(&job.id);
                 continue;
@@ -284,7 +346,12 @@ impl SweeperService {
                     info!("✅ Successfully swept job {}. Tx: {}", job.id, tx_hash_str);
                     if let Err(e) = self
                         .convex
-                        .update_sweep_job_status(&job.id, "completed", Some(tx_hash_str))
+                        .update_sweep_job_status(
+                            &job.id,
+                            "completed",
+                            Some(tx_hash_str),
+                            Some(format!("{:#x}", destination_address)),
+                        )
                         .await
                     {
                         error!("Failed to update job {} to completed: {:?}", job.id, e);
@@ -299,17 +366,20 @@ impl SweeperService {
                     );
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "queued", None)
+                        .update_sweep_job_status(&job.id, "queued", None, None)
                         .await;
                 }
-                Ok(SweepOutcome::SkippedDust { balance, max_gas_cost }) => {
+                Ok(SweepOutcome::SkippedDust {
+                    balance,
+                    max_gas_cost,
+                }) => {
                     warn!(
                         "💨 Dust detected for job {}: balance={}, gas_needed={}. Marking failed.",
                         job.id, balance, max_gas_cost
                     );
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "failed", None)
+                        .update_sweep_job_status(&job.id, "failed", None, None)
                         .await;
                     self.retry_counts.remove(&job.id);
                 }
@@ -321,7 +391,12 @@ impl SweeperService {
                     let tx_hash_str = format!("{:#x}", H256::zero());
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "completed", Some(tx_hash_str))
+                        .update_sweep_job_status(
+                            &job.id,
+                            "completed",
+                            Some(tx_hash_str),
+                            Some(format!("{:#x}", destination_address)),
+                        )
                         .await;
                     self.retry_counts.remove(&job.id);
                 }
@@ -335,7 +410,7 @@ impl SweeperService {
                     // Return to queued for retry — NOT permanent failure
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "queued", None)
+                        .update_sweep_job_status(&job.id, "queued", None, None)
                         .await;
                     info!(
                         "↩️ Job {} returned to queued for retry (next attempt in {}s)",
