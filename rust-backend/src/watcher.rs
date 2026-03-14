@@ -4,11 +4,22 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::{sleep, Duration};
 
 use tracing::{debug, error, info, trace, warn};
 
 /// How often to refresh the stealth address cache during historical catch-up
 const CACHE_REFRESH_INTERVAL: u64 = 50;
+
+/// Delay between RPC calls to avoid rate-limiting by free public nodes.
+/// 200ms allows ~5 requests/second, well within most public node limits.
+const RPC_THROTTLE: Duration = Duration::from_millis(200);
+
+/// Delay before reconnecting after a WebSocket disconnection
+const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+
+/// Maximum number of consecutive reconnection attempts
+const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
 use crate::config::WatcherConfig;
 use crate::convex_client::ConvexRepository;
@@ -28,13 +39,37 @@ impl WatcherService {
         Self { config, convex }
     }
 
-    /// Start the watcher loop to listen for blockchain events
+    /// Start the watcher loop to listen for blockchain events.
+    /// Automatically reconnects on WebSocket disconnections.
     pub async fn start(&self) -> Result<()> {
-        if let Err(e) = self.start_inner().await {
-            error!("Watcher service failed permanently: {}", e);
-            std::process::exit(1);
+        let mut reconnect_attempts: u32 = 0;
+
+        loop {
+            match self.start_inner().await {
+                Ok(()) => {
+                    warn!("Watcher stream ended unexpectedly, reconnecting...");
+                }
+                Err(e) => {
+                    error!("Watcher service error: {}", e);
+                    reconnect_attempts += 1;
+                    if reconnect_attempts > MAX_RECONNECT_ATTEMPTS {
+                        error!(
+                            "Exceeded {} reconnection attempts, shutting down",
+                            MAX_RECONNECT_ATTEMPTS
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            warn!(
+                "Reconnecting in {}s (attempt {}/{})...",
+                RECONNECT_DELAY.as_secs(),
+                reconnect_attempts,
+                MAX_RECONNECT_ATTEMPTS
+            );
+            sleep(RECONNECT_DELAY).await;
         }
-        Ok(())
     }
 
     async fn start_inner(&self) -> Result<()> {
@@ -52,12 +87,27 @@ impl WatcherService {
         info!("Successfully connected to Base WSS provider");
 
         let current_block = provider.get_block_number().await?.as_u64();
-        let start_block = self.config.start_block.unwrap_or(current_block);
+        let mut start_block = self.config.start_block.unwrap_or(current_block);
+
+        // Smart skip: if the checkpoint is too far behind, skip to near the
+        // current head. Processing 14K+ old blocks takes hours and is useless
+        // for testing/demos. We only need to watch for recent transactions.
+        const MAX_CATCHUP_BLOCKS: u64 = 50;
+        let gap = current_block.saturating_sub(start_block);
+        if gap > MAX_CATCHUP_BLOCKS {
+            let skip_to = current_block.saturating_sub(5);
+            warn!(
+                "Checkpoint is {} blocks behind (block {} vs head {}). \
+                 Skipping to block {} to avoid multi-hour catch-up.",
+                gap, start_block, current_block, skip_to
+            );
+            start_block = skip_to;
+        }
 
         // Track the last block we've fully processed to avoid gaps and duplicates
         let mut last_processed_block = if start_block < current_block {
             info!(
-                "Catching up on historical blocks from {} to {} ({} blocks)",
+                "Catching up on recent blocks from {} to {} ({} blocks)",
                 start_block,
                 current_block,
                 current_block - start_block
@@ -98,6 +148,9 @@ impl WatcherService {
                 {
                     error!("Error processing historical block {}: {:?}", block_num, e);
                 }
+
+                // Throttle to avoid rate-limiting by public RPC nodes
+                sleep(RPC_THROTTLE).await;
             }
             if let Err(e) = self.update_confirmations(&provider, current_block).await {
                 error!("Error updating confirmations after catch-up: {:?}", e);
@@ -130,6 +183,7 @@ impl WatcherService {
                 {
                     error!("Error processing gap block {}: {:?}", block_num, e);
                 }
+                sleep(RPC_THROTTLE).await;
             }
             last_processed_block = new_head;
             info!("Gap fill complete. Now listening for live blocks.");
@@ -163,6 +217,7 @@ impl WatcherService {
                         {
                             error!("Error processing gap block {}: {:?}", gap_block, e);
                         }
+                        sleep(RPC_THROTTLE).await;
                     }
                 }
 
@@ -544,8 +599,19 @@ impl WatcherService {
         debug!("Updating confirmations up to block: {}", current_block);
 
         let pending = self.convex.get_pending_confirmation_updates().await?;
+        let pending_count = pending.len();
+        if pending_count > 0 {
+            debug!(
+                "Checking confirmations for {} pending deposit(s)",
+                pending_count
+            );
+        }
+
         for deposit in pending {
             let confs = current_block.saturating_sub(deposit.block_number) + 1;
+
+            // Throttle before each RPC call to avoid rate-limiting
+            sleep(RPC_THROTTLE).await;
 
             // Check if tx is still in the same block (handle reorg)
             match provider

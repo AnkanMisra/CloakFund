@@ -93,7 +93,7 @@ async fn run_server() -> anyhow::Result<()> {
     });
 
     info!("Starting sweeper service...");
-    let sweeper = SweeperService::new(config.watcher.clone(), convex.clone());
+    let mut sweeper = SweeperService::new(config.watcher.clone(), convex.clone());
     tokio::spawn(async move {
         if let Err(e) = sweeper.start().await {
             error!("Sweeper service failed: {}", e);

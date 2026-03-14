@@ -144,3 +144,24 @@ export const getAllSweepJobs = query({
     return await ctx.db.query("sweepJobs").order("desc").collect();
   },
 });
+
+/**
+ * Reset any jobs stuck in "broadcasting" status back to "queued".
+ * Called on sweeper startup to recover from crashes that left jobs orphaned.
+ */
+export const resetStuckJobs = mutation({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const stuckJobs = await ctx.db
+      .query("sweepJobs")
+      .withIndex("by_status", (q) => q.eq("status", "broadcasting"))
+      .collect();
+
+    for (const job of stuckJobs) {
+      await ctx.db.patch(job._id, { status: "queued" });
+    }
+
+    return stuckJobs.length;
+  },
+});

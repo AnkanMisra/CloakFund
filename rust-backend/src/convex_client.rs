@@ -468,6 +468,26 @@ impl ConvexRepository {
             }
         }
     }
+
+    /// Resets any sweep jobs stuck in "broadcasting" status back to "queued".
+    /// Should be called on sweeper startup to recover from crashes.
+    pub async fn reset_stuck_sweep_jobs(&self) -> Result<u64> {
+        let args = std::collections::BTreeMap::new();
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("sweeps:resetStuckJobs", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let count: u64 = serde_json::from_value(convex_to_json(val))?;
+                Ok(count)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
 }
 
 fn json_to_convex(json: serde_json::Value) -> convex::Value {

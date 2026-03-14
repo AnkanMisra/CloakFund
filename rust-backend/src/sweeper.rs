@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use ethers::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
@@ -12,42 +13,99 @@ use std::env;
 use std::str::FromStr;
 use zeroize::{Zeroize, Zeroizing};
 
+/// Maximum number of retry attempts before giving up on a sweep job.
+const MAX_RETRY_ATTEMPTS: u32 = 5;
+
+/// Base backoff delay in seconds. Actual delay = base × 2^attempt.
+const BACKOFF_BASE_SECS: u64 = 5;
+
 /// The SweeperService monitors Convex for finalized deposits and sweeps them
-/// to the centralized treasury (e.g., BitGo vault).
+/// to the centralized treasury using proper EIP-1559 transactions.
+///
+/// State machine:
+///   queued → processing → broadcasted → confirmed
+///   On error: processing → queued (retryable with exponential backoff)
+///   After MAX_RETRY_ATTEMPTS: queued → failed (permanent)
 pub struct SweeperService {
     config: WatcherConfig,
     convex: Arc<ConvexRepository>,
+    /// In-memory retry tracking: job_id → attempt count
+    retry_counts: HashMap<String, u32>,
 }
 
 impl SweeperService {
     /// Creates a new SweeperService instance.
     pub fn new(config: WatcherConfig, convex: Arc<ConvexRepository>) -> Self {
-        Self { config, convex }
+        Self {
+            config,
+            convex,
+            retry_counts: HashMap::new(),
+        }
     }
 
-    /// Starts the sweeping loop.
-    pub async fn start(&self) -> Result<()> {
+    /// Starts the sweeping loop with automatic reconnection.
+    pub async fn start(&mut self) -> Result<()> {
         info!("Starting SweeperService...");
 
         let sweeper_config = SweeperConfig::from_env().context("Failed to load sweeper config")?;
 
-        let provider = Provider::<Ws>::connect(&self.config.base_wss_url)
-            .await
-            .context("Failed to connect to Base WSS endpoint for sweeper")?;
-        let provider = Arc::new(provider);
+        info!(
+            "Sweeper config: treasury={}, dry_run={}",
+            sweeper_config.treasury_address, sweeper_config.dry_run
+        );
+
+        // On startup, reset any jobs stuck in "broadcasting" from a previous crash.
+        match self.convex.reset_stuck_sweep_jobs().await {
+            Ok(0) => debug!("No stuck sweep jobs found."),
+            Ok(count) => info!("♻️ Reset {} stuck 'broadcasting' job(s) back to 'queued'", count),
+            Err(e) => warn!("Failed to reset stuck sweep jobs: {:?}", e),
+        }
 
         loop {
-            if let Err(e) = self.process_pending_jobs(&provider, &sweeper_config).await {
-                error!("Error in sweeper loop: {:?}", e);
+            // Use HTTP RPC — the sweeper only makes occasional balance checks
+            // and tx broadcasts, it doesn't need a live WebSocket subscription.
+            let provider = match Provider::<Http>::try_from(&self.config.base_rpc_url) {
+                Ok(p) => Arc::new(p),
+                Err(e) => {
+                    error!("Failed to create HTTP provider for sweeper: {:?}", e);
+                    sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+
+            info!("Sweeper connected to HTTP RPC: {}", self.config.base_rpc_url);
+
+            if let Err(e) = self.sweep_loop(&provider, &sweeper_config).await {
+                error!("Sweeper loop error: {:?}. Restarting in 10s...", e);
+                sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+
+    /// Inner sweep loop — runs until an error occurs.
+    async fn sweep_loop(
+        &mut self,
+        provider: &Arc<Provider<Http>>,
+        sweeper_config: &SweeperConfig,
+    ) -> Result<()> {
+        loop {
+            if let Err(e) = self.process_pending_jobs(provider, sweeper_config).await {
+                error!("Error processing sweep jobs: {:?}", e);
             }
             sleep(Duration::from_secs(self.config.polling_interval_secs)).await;
         }
     }
 
+    /// Compute exponential backoff delay for a given retry attempt.
+    fn backoff_delay(attempt: u32) -> Duration {
+        let secs = BACKOFF_BASE_SECS * 2u64.pow(attempt.min(6)); // cap at ~320s
+        Duration::from_secs(secs)
+    }
+
     /// Queries pending sweep jobs from Convex and attempts to execute them.
     async fn process_pending_jobs(
-        &self,
-        provider: &Arc<Provider<Ws>>,
+        &mut self,
+        provider: &Arc<Provider<Http>>,
         sweeper_config: &SweeperConfig,
     ) -> Result<()> {
         debug!("Checking for pending sweep jobs...");
@@ -56,6 +114,8 @@ impl SweeperService {
         if jobs.is_empty() {
             return Ok(());
         }
+
+        info!("Found {} pending sweep job(s)", jobs.len());
 
         let treasury_addr = Address::from_str(&sweeper_config.treasury_address)
             .context("Invalid treasury address format")?;
@@ -74,7 +134,40 @@ impl SweeperService {
         }
 
         for job in jobs {
-            info!("Processing sweep job: {}", job.id);
+            let attempt = *self.retry_counts.get(&job.id).unwrap_or(&0);
+
+            // ── Check retry limit ──────────────────────────────────────
+            if attempt >= MAX_RETRY_ATTEMPTS {
+                warn!(
+                    "⛔ Job {} exceeded max retries ({}). Marking as permanently failed.",
+                    job.id, MAX_RETRY_ATTEMPTS
+                );
+                let _ = self
+                    .convex
+                    .update_sweep_job_status(&job.id, "failed", None)
+                    .await;
+                self.retry_counts.remove(&job.id);
+                continue;
+            }
+
+            // ── Apply exponential backoff on retries ───────────────────
+            if attempt > 0 {
+                let delay = Self::backoff_delay(attempt - 1);
+                info!(
+                    "Job {} retry #{} — backing off for {}s",
+                    job.id,
+                    attempt,
+                    delay.as_secs()
+                );
+                sleep(delay).await;
+            }
+
+            info!(
+                "Processing sweep job: {} (stealth={}, asset={}, amount={}, attempt={})",
+                job.id, job.stealth_address, job.asset_type, job.amount, attempt + 1
+            );
+
+            // ── Transition: queued → processing ────────────────────────
             if let Err(e) = self
                 .convex
                 .update_sweep_job_status(&job.id, "broadcasting", None)
@@ -87,6 +180,7 @@ impl SweeperService {
                 continue;
             }
 
+            // ── Derive stealth address ─────────────────────────────────
             let stealth_address = match Address::from_str(&job.stealth_address) {
                 Ok(addr) => addr,
                 Err(e) => {
@@ -95,9 +189,16 @@ impl SweeperService {
                         .convex
                         .update_sweep_job_status(&job.id, "failed", None)
                         .await;
+                    self.retry_counts.remove(&job.id);
                     continue;
                 }
             };
+
+            // ── Recover stealth private key ────────────────────────────
+            info!(
+                "Recovering stealth private key for job {} (ephemeral_pub={})",
+                job.id, job.ephemeral_pubkey_hex
+            );
 
             let ephem_priv_key_hex = match stealth::recover_stealth_private_key(
                 &recipient_priv_hex,
@@ -113,6 +214,7 @@ impl SweeperService {
                         .convex
                         .update_sweep_job_status(&job.id, "failed", None)
                         .await;
+                    self.retry_counts.remove(&job.id);
                     continue;
                 }
             };
@@ -128,6 +230,7 @@ impl SweeperService {
                         .convex
                         .update_sweep_job_status(&job.id, "failed", None)
                         .await;
+                    self.retry_counts.remove(&job.id);
                     continue;
                 }
             }
@@ -135,6 +238,12 @@ impl SweeperService {
             let ephemeral_key = EphemeralPrivateKey(ephem_priv_key);
             ephem_priv_key.zeroize();
 
+            info!(
+                "Executing EIP-1559 sweep: {} → treasury {:?} (dry_run={})",
+                job.stealth_address, treasury_addr, sweeper_config.dry_run
+            );
+
+            // ── Execute sweep ──────────────────────────────────────────
             let sweep_result = if job.asset_type == "native" {
                 consolidator
                     .sweep_native(ephemeral_key, stealth_address)
@@ -151,6 +260,7 @@ impl SweeperService {
                             .convex
                             .update_sweep_job_status(&job.id, "failed", None)
                             .await;
+                        self.retry_counts.remove(&job.id);
                         continue;
                     }
                 };
@@ -163,13 +273,15 @@ impl SweeperService {
                     .convex
                     .update_sweep_job_status(&job.id, "failed", None)
                     .await;
+                self.retry_counts.remove(&job.id);
                 continue;
             };
 
+            // ── Handle outcome ─────────────────────────────────────────
             match sweep_result {
                 Ok(SweepOutcome::Success(tx_hash)) => {
                     let tx_hash_str = format!("{:#x}", tx_hash);
-                    info!("Successfully swept job {}. Tx: {}", job.id, tx_hash_str);
+                    info!("✅ Successfully swept job {}. Tx: {}", job.id, tx_hash_str);
                     if let Err(e) = self
                         .convex
                         .update_sweep_job_status(&job.id, "completed", Some(tx_hash_str))
@@ -177,10 +289,12 @@ impl SweeperService {
                     {
                         error!("Failed to update job {} to completed: {:?}", job.id, e);
                     }
+                    // Clear retry counter on success
+                    self.retry_counts.remove(&job.id);
                 }
                 Ok(SweepOutcome::SkippedZeroBalance) => {
                     warn!(
-                        "Skipped sweep job {} due to zero balance; returning to queued",
+                        "⚠️ Skipped sweep job {} due to zero balance; returning to queued",
                         job.id
                     );
                     let _ = self
@@ -188,19 +302,20 @@ impl SweeperService {
                         .update_sweep_job_status(&job.id, "queued", None)
                         .await;
                 }
-                Ok(SweepOutcome::SkippedInsufficientGas { balance, gas_cost }) => {
+                Ok(SweepOutcome::SkippedDust { balance, max_gas_cost }) => {
                     warn!(
-                        "Skipped sweep job {} due to insufficient gas (balance: {}, gas_cost: {}); returning to queued",
-                        job.id, balance, gas_cost
+                        "💨 Dust detected for job {}: balance={}, gas_needed={}. Marking failed.",
+                        job.id, balance, max_gas_cost
                     );
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "queued", None)
+                        .update_sweep_job_status(&job.id, "failed", None)
                         .await;
+                    self.retry_counts.remove(&job.id);
                 }
                 Ok(SweepOutcome::SkippedDryRun) => {
                     info!(
-                        "DRY RUN: Skipped sweep job {}; marking as completed with zero hash",
+                        "🔶 DRY RUN: Skipped sweep job {}; marking as completed",
                         job.id
                     );
                     let tx_hash_str = format!("{:#x}", H256::zero());
@@ -208,15 +323,30 @@ impl SweeperService {
                         .convex
                         .update_sweep_job_status(&job.id, "completed", Some(tx_hash_str))
                         .await;
+                    self.retry_counts.remove(&job.id);
                 }
                 Err(e) => {
-                    error!("Failed to execute sweep for job {}: {:?}", job.id, e);
+                    let attempt = self.retry_counts.entry(job.id.clone()).or_insert(0);
+                    *attempt += 1;
+                    error!(
+                        "❌ Sweep failed for job {} (attempt {}/{}): {:?}",
+                        job.id, attempt, MAX_RETRY_ATTEMPTS, e
+                    );
+                    // Return to queued for retry — NOT permanent failure
                     let _ = self
                         .convex
-                        .update_sweep_job_status(&job.id, "failed", None)
+                        .update_sweep_job_status(&job.id, "queued", None)
                         .await;
+                    info!(
+                        "↩️ Job {} returned to queued for retry (next attempt in {}s)",
+                        job.id,
+                        Self::backoff_delay(*attempt - 1).as_secs()
+                    );
                 }
             }
+
+            // Throttle between jobs to avoid RPC rate-limiting
+            sleep(Duration::from_millis(500)).await;
         }
 
         Ok(())
