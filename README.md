@@ -108,6 +108,20 @@ graph TB
 
 ---
 
+## Cryptographic Algorithms
+
+CloakFund utilizes robust, industry-standard cryptographic primitives to ensure complete privacy without compromising on-chain verifiability.
+
+| Phase | Algorithm | Application & Description |
+|---|---|---|
+| **1. Stealth Addressing** | `secp256k1` / ECDH | Sender generates an ephemeral keypair and computes a shared secret `S = ECDH(r, P)`. |
+| **2. Key Derivation** | `Keccak256` | The shared secret is hashed to derive a curve scalar `h`, creating the stealth public key `P_stealth = P + h·G`. |
+| **3. EVM Formatting** | `EIP-55` Checksum | The stealth public key is converted into a standard, deterministic Ethereum address. |
+| **4. Zero-Knowledge Proofs** | Hash-Commit-Reveal | The Rust Agent hashes a cryptographic `Secret` and `Nullifier` into a `Commitment` for the PrivacyPool. |
+| **5. Receipt Encryption** | `ChaCha20-Poly1305` | Payment receipts are symmetrically encrypted so only the recipient can view off-chain metadata. |
+
+---
+
 ## Benchmarks & Performance
 
 CloakFund is engineered for high throughput and minimal latency.
