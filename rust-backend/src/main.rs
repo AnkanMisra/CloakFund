@@ -92,8 +92,13 @@ async fn run_server() -> anyhow::Result<()> {
         }
     });
 
+    // Create a SEPARATE Convex client for the sweeper to avoid
+    // mutex contention with the watcher's frequent checkpoint updates.
+    info!("Initializing dedicated sweeper Convex client...");
+    let sweeper_convex = Arc::new(ConvexRepository::new(&config.convex).await?);
+
     info!("Starting sweeper service...");
-    let mut sweeper = SweeperService::new(config.watcher.clone(), convex.clone());
+    let mut sweeper = SweeperService::new(config.watcher.clone(), sweeper_convex);
     tokio::spawn(async move {
         if let Err(e) = sweeper.start().await {
             error!("Sweeper service failed: {}", e);

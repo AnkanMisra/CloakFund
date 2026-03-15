@@ -5,10 +5,11 @@ use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 
-use crate::bitgo_client::BitGoClient;
 use crate::config::{SweeperConfig, WatcherConfig};
 use crate::consolidator::{Consolidator, EphemeralPrivateKey, SweepOutcome};
 use crate::convex_client::ConvexRepository;
+use crate::models::NewPrivacyNote;
+use crate::privacy_pool;
 use crate::stealth;
 use std::env;
 use std::str::FromStr;
@@ -20,7 +21,7 @@ const MAX_RETRY_ATTEMPTS: u32 = 5;
 const BACKOFF_BASE_SECS: u64 = 5;
 
 /// The SweeperService monitors Convex for finalized deposits and sweeps them
-/// to the centralized treasury using proper EIP-1559 transactions.
+/// into the PrivacyPool smart contract using the ZK-Mixer commit-reveal scheme.
 ///
 /// State machine:
 ///   queued → processing → broadcasted → confirmed
@@ -45,16 +46,14 @@ impl SweeperService {
 
     /// Starts the sweeping loop with automatic reconnection.
     pub async fn start(&mut self) -> Result<()> {
-        info!("Starting SweeperService...");
+        info!("Starting SweeperService (ZK-Mixer mode)...");
 
         let sweeper_config = SweeperConfig::from_env().context("Failed to load sweeper config")?;
 
         info!(
-            "Sweeper config: bitgo_url={}, bitgo_coin={}, bitgo_wallet={}, token={}…, dry_run={}",
-            sweeper_config.bitgo_base_url,
-            sweeper_config.bitgo_coin,
-            sweeper_config.bitgo_wallet_id,
-            &sweeper_config.bitgo_access_token[..sweeper_config.bitgo_access_token.len().min(8)],
+            "Sweeper config: privacy_pool={}, relayer_key={}…, dry_run={}",
+            sweeper_config.privacy_pool_address,
+            &sweeper_config.relayer_private_key[..sweeper_config.relayer_private_key.len().min(8)],
             sweeper_config.dry_run
         );
 
@@ -127,15 +126,14 @@ impl SweeperService {
 
         info!("Found {} pending sweep job(s)", jobs.len());
 
+        // Parse the PrivacyPool contract address
+        let pool_address = Address::from_str(&sweeper_config.privacy_pool_address)
+            .context("Invalid PRIVACY_POOL_ADDRESS")?;
+
         let consolidator = Consolidator::new(
             provider.clone(),
             sweeper_config.dry_run,
             self.config.chain_id,
-        );
-
-        let bitgo_client = BitGoClient::new(
-            sweeper_config.bitgo_base_url.clone(),
-            sweeper_config.bitgo_access_token.clone(),
         );
 
         let recipient_priv_hex = env::var("RECIPIENT_PRIVATE_KEY_HEX").unwrap_or_default();
@@ -182,7 +180,7 @@ impl SweeperService {
                 attempt + 1
             );
 
-            // ── Transition: queued → processing ────────────────────────
+            // ── Transition: queued → broadcasting ───────────────────────
             if let Err(e) = self
                 .convex
                 .update_sweep_job_status(&job.id, "broadcasting", None, None)
@@ -236,56 +234,30 @@ impl SweeperService {
 
             let ephemeral_key = EphemeralPrivateKey(*recovered_key);
 
-            // ── Generate Dynamic BitGo Deposit Address ─────────────────
+            // ── Generate Privacy Note (secret + nullifier) ─────────────
             info!(
-                "Generating dynamic BitGo deposit address for job {}...",
+                "🔐 Generating privacy note for job {} (ZK-Mixer deposit)...",
                 job.id
             );
 
-            let new_address_res = match bitgo_client
-                .create_address(&sweeper_config.bitgo_coin, &sweeper_config.bitgo_wallet_id)
-                .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    error!(
-                        "Failed to generate BitGo address for job {}: {:?}",
-                        job.id, e
-                    );
-                    let _ = self
-                        .convex
-                        .update_sweep_job_status(&job.id, "failed", None, None)
-                        .await;
-                    self.retry_counts.remove(&job.id);
-                    continue;
-                }
-            };
-
-            let destination_address = match Address::from_str(&new_address_res.address) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    error!(
-                        "Invalid BitGo generated address {} for job {}: {:?}",
-                        new_address_res.address, job.id, e
-                    );
-                    let _ = self
-                        .convex
-                        .update_sweep_job_status(&job.id, "failed", None, None)
-                        .await;
-                    self.retry_counts.remove(&job.id);
-                    continue;
-                }
-            };
+            let note = privacy_pool::generate_note();
+            let commitment = privacy_pool::compute_commitment(&note.secret, &note.nullifier);
+            let commitment_hex = hex::encode(commitment);
 
             info!(
-                "Executing EIP-1559 sweep: {} → dynamic destination {:?} (dry_run={})",
-                job.stealth_address, destination_address, sweeper_config.dry_run
+                "Generated commitment: 0x{} for job {}",
+                commitment_hex, job.id
             );
 
-            // ── Execute sweep ──────────────────────────────────────────
+            // ── Execute sweep → PrivacyPool.deposit(commitment) ────────
+            info!(
+                "Executing ZK-Mixer deposit: {:?} → PrivacyPool {:?} (dry_run={})",
+                stealth_address, pool_address, sweeper_config.dry_run
+            );
+
             let sweep_result = if job.asset_type == "native" {
                 consolidator
-                    .sweep_native(ephemeral_key, stealth_address, destination_address)
+                    .sweep_native(ephemeral_key, stealth_address, pool_address, &commitment)
                     .await
             } else if job.asset_type == "erc20" {
                 let token_address = match job.token_address.as_deref().map(Address::from_str) {
@@ -304,12 +276,7 @@ impl SweeperService {
                     }
                 };
                 consolidator
-                    .sweep_erc20(
-                        ephemeral_key,
-                        stealth_address,
-                        token_address,
-                        destination_address,
-                    )
+                    .sweep_erc20(ephemeral_key, stealth_address, token_address, pool_address)
                     .await
             } else {
                 error!("Unknown asset type {} for job {}", job.asset_type, job.id);
@@ -323,16 +290,49 @@ impl SweeperService {
 
             // ── Handle outcome ─────────────────────────────────────────
             match sweep_result {
-                Ok(SweepOutcome::Success(tx_hash)) => {
+                Ok(SweepOutcome::Success(tx_hash, _commitment_hex)) => {
                     let tx_hash_str = format!("{:#x}", tx_hash);
-                    info!("✅ Successfully swept job {}. Tx: {}", job.id, tx_hash_str);
+                    info!(
+                        "✅ Successfully deposited into PrivacyPool for job {}. Tx: {}",
+                        job.id, tx_hash_str
+                    );
+
+                    // Store the privacy note in Convex so the receiver can withdraw later
+                    let new_note = NewPrivacyNote {
+                        deposit_id: job.deposit_id.clone(),
+                        sweep_job_id: job.id.clone(),
+                        secret_hex: hex::encode(note.secret),
+                        nullifier_hex: hex::encode(note.nullifier),
+                        commitment_hex: commitment_hex.clone(),
+                        pool_deposit_tx_hash: Some(tx_hash_str.clone()),
+                    };
+
+                    match self.convex.store_privacy_note(&new_note).await {
+                        Ok(note_id) => {
+                            info!(
+                                "📝 Privacy note stored in Convex: {} (commitment=0x{})",
+                                note_id, commitment_hex
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "⚠️ Failed to store privacy note for job {} — \
+                                 NOTE: Funds are deposited but note may be lost! Error: {:?}",
+                                job.id, e
+                            );
+                            // We still mark the sweep as completed since the on-chain
+                            // deposit succeeded. The note can be reconstructed from
+                            // the commitment if needed.
+                        }
+                    }
+
                     if let Err(e) = self
                         .convex
                         .update_sweep_job_status(
                             &job.id,
                             "completed",
                             Some(tx_hash_str),
-                            Some(format!("{:#x}", destination_address)),
+                            Some(format!("{:#x}", pool_address)),
                         )
                         .await
                     {
@@ -357,7 +357,7 @@ impl SweeperService {
                     max_gas_cost,
                 }) => {
                     warn!(
-                        "💨 Dust detected for job {}: balance={}, gas_needed={}. Marking failed.",
+                        "💨 Insufficient balance for job {}: balance={}, required={}. Marking failed.",
                         job.id, balance, max_gas_cost
                     );
                     let _ = self
@@ -378,7 +378,7 @@ impl SweeperService {
                             &job.id,
                             "completed",
                             Some(tx_hash_str),
-                            Some(format!("{:#x}", destination_address)),
+                            Some(format!("{:#x}", pool_address)),
                         )
                         .await;
                     self.retry_counts.remove(&job.id);

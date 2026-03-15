@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CloakFund — Private Payments via ZK-Mixer</title>
+  <meta name="description" content="CloakFund: Decentralized private payments using stealth addresses and a ZK-Mixer privacy pool on Base." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ─── Background Particles ─── -->
+  <div class="bg-effects">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- ─── Header ─── -->
+  <header id="app-header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">🛡️</span>
+        <span class="logo-text">CloakFund</span>
+      </div>
+      <span class="badge">ZK-Mixer • Base Sepolia</span>
+    </div>
+    <div class="header-right">
+      <div class="status-dot" id="backendStatus" title="Backend offline"></div>
+      <span class="status-label" id="backendStatusLabel">Connecting…</span>
+    </div>
+  </header>
+
+  <!-- ─── Main ─── -->
+  <main id="app-main">
+
+    <!-- ─── Phase Stepper ─── -->
+    <nav id="phase-stepper">
+      <button class="step-btn active" data-phase="receive" id="step-receive">
+        <span class="step-num">1</span>
+        <span class="step-label">Receive</span>
+      </button>
+      <div class="step-connector"></div>
+      <button class="step-btn" data-phase="track" id="step-track">
+        <span class="step-num">2</span>
+        <span class="step-label">Track</span>
+      </button>
+      <div class="step-connector"></div>
+      <button class="step-btn" data-phase="withdraw" id="step-withdraw">
+        <span class="step-num">3</span>
+        <span class="step-label">Withdraw</span>
+      </button>
+      <div class="step-connector"></div>
+      <button class="step-btn" data-phase="history" id="step-history">
+        <span class="step-num">4</span>
+        <span class="step-label">History</span>
+      </button>
+    </nav>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  PHASE 1 — RECEIVE: Generate stealth wallet                -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section class="phase-panel active" id="panel-receive">
+      <div class="panel-card glass-card">
+        <div class="panel-icon">📨</div>
+        <h2>Create a Payment Link</h2>
+        <p class="panel-desc">Enter your ENS name (or identifier) to generate a one-time stealth wallet address. Share this address with the person paying you.</p>
+
+        <form id="form-receive" autocomplete="off">
+          <div class="input-group">
+            <label for="inp-ens">Your ENS Name</label>
+            <input type="text" id="inp-ens" placeholder="alice.eth" required />
+          </div>
+          <button type="submit" class="btn-primary" id="btn-generate">
+            <span class="btn-text">Generate Stealth Wallet</span>
+            <span class="btn-loader hidden"></span>
+          </button>
+        </form>
+
+        <!-- Result -->
+        <div class="result-box hidden" id="receive-result">
+          <h3>✅ Stealth Wallet Ready</h3>
+          <p>Share this one-time address with your sender:</p>
+          <div class="copy-row">
+            <code id="stealth-addr-display"></code>
+            <button class="btn-copy" id="btn-copy-addr" title="Copy address">📋</button>
+          </div>
+          <div class="meta-grid">
+            <div class="meta-item">
+              <span class="meta-label">Paylink ID</span>
+              <code id="paylink-id-display" class="mono-sm"></code>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Ephemeral Pubkey</span>
+              <code id="ephemeral-pub-display" class="mono-sm truncate"></code>
+            </div>
+          </div>
+          <button class="btn-secondary" id="btn-goto-track">Track this Payment →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  PHASE 2 — TRACK: Watch deposit + sweeper progress         -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section class="phase-panel" id="panel-track">
+      <div class="panel-card glass-card">
+        <div class="panel-icon">🔍</div>
+        <h2>Track Payment Status</h2>
+        <p class="panel-desc">Enter a stealth address or paylink ID to check the deposit, sweep, and privacy note status.</p>
+
+        <form id="form-track" autocomplete="off">
+          <div class="input-group">
+            <label for="inp-track-addr">Stealth Address or Tx Hash</label>
+            <input type="text" id="inp-track-addr" placeholder="0x..." required />
+          </div>
+          <button type="submit" class="btn-primary" id="btn-track">
+            <span class="btn-text">Check Status</span>
+            <span class="btn-loader hidden"></span>
+          </button>
+        </form>
+
+        <div class="hidden" id="track-result">
+          <!-- Timeline -->
+          <div class="timeline" id="timeline">
+            <div class="tl-step" id="tl-deposit">
+              <div class="tl-dot"></div>
+              <div class="tl-content">
+                <h4>Deposit Detected</h4>
+                <p id="tl-deposit-detail">—</p>
+              </div>
+            </div>
+            <div class="tl-step" id="tl-confirmed">
+              <div class="tl-dot"></div>
+              <div class="tl-content">
+                <h4>Confirmed</h4>
+                <p id="tl-confirmed-detail">—</p>
+              </div>
+            </div>
+            <div class="tl-step" id="tl-swept">
+              <div class="tl-dot"></div>
+              <div class="tl-content">
+                <h4>Swept to Privacy Pool</h4>
+                <p id="tl-swept-detail">—</p>
+              </div>
+            </div>
+            <div class="tl-step" id="tl-note">
+              <div class="tl-dot"></div>
+              <div class="tl-content">
+                <h4>Privacy Note Generated</h4>
+                <p id="tl-note-detail">—</p>
+              </div>
+            </div>
+            <div class="tl-step" id="tl-withdrawn">
+              <div class="tl-dot"></div>
+              <div class="tl-content">
+                <h4>Withdrawn</h4>
+                <p id="tl-withdrawn-detail">—</p>
+              </div>
+            </div>
+          </div>
+          <button class="btn-secondary hidden" id="btn-goto-withdraw">Withdraw Funds →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  PHASE 3 — WITHDRAW: Anonymous claim                      -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section class="phase-panel" id="panel-withdraw">
+      <div class="panel-card glass-card">
+        <div class="panel-icon">💰</div>
+        <h2>Withdraw Anonymously</h2>
+        <p class="panel-desc">Use your privacy note (secret + nullifier) to withdraw funds to any wallet. The relayer pays gas — no link to your identity.</p>
+
+        <form id="form-withdraw" autocomplete="off">
+          <div class="input-group">
+            <label for="inp-secret">Secret (hex)</label>
+            <input type="text" id="inp-secret" placeholder="64 hex characters" required />
+          </div>
+          <div class="input-group">
+            <label for="inp-nullifier">Nullifier (hex)</label>
+            <input type="text" id="inp-nullifier" placeholder="64 hex characters" required />
+          </div>
+          <div class="input-group">
+            <label for="inp-recipient">Your Main Wallet Address</label>
+            <input type="text" id="inp-recipient" placeholder="0x..." required />
+          </div>
+          <button type="submit" class="btn-primary" id="btn-withdraw">
+            <span class="btn-text">Withdraw via Relayer</span>
+            <span class="btn-loader hidden"></span>
+          </button>
+        </form>
+
+        <div class="result-box hidden" id="withdraw-result">
+          <h3 id="withdraw-result-title"></h3>
+          <p id="withdraw-result-msg"></p>
+          <div class="copy-row hidden" id="withdraw-tx-row">
+            <code id="withdraw-tx-display"></code>
+            <a id="withdraw-tx-link" href="#" target="_blank" class="btn-link">View on BaseScan ↗</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  PHASE 4 — HISTORY: Saved local transactions               -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section class="phase-panel" id="panel-history">
+      <div class="panel-card glass-card">
+        <div class="panel-icon">📜</div>
+        <h2>Transaction History</h2>
+        <p class="panel-desc">All your CloakFund payment links and their current status. Stored locally in your browser.</p>
+
+        <div id="history-empty" class="empty-state">
+          <p>No transactions yet. Create a payment link to get started!</p>
+        </div>
+        <div id="history-list" class="history-list"></div>
+        <button class="btn-danger hidden" id="btn-clear-history">Clear History</button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ─── Footer ─── -->
+  <footer id="app-footer">
+    <p>CloakFund ZK-Mixer • Privacy Pool on Base Sepolia •
+      <a href="https://sepolia.basescan.org/address/0x57E12967B278FaD279A70D13Ed2b2B82323d0B42" target="_blank">Contract ↗</a>
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

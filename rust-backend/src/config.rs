@@ -39,10 +39,10 @@ pub struct ConvexClientConfig {
 #[derive(Debug, Clone)]
 pub struct SweeperConfig {
     pub dry_run: bool,
-    pub bitgo_base_url: String,
-    pub bitgo_access_token: String,
-    pub bitgo_wallet_id: String,
-    pub bitgo_coin: String,
+    /// The deployed PrivacyPool.sol contract address
+    pub privacy_pool_address: String,
+    /// Private key for the relayer hot-wallet (pays gas for withdrawals)
+    pub relayer_private_key: String,
 }
 
 #[derive(Debug, Error)]
@@ -118,16 +118,8 @@ impl SweeperConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
             dry_run: parse_env_or_default("SWEEPER_DRY_RUN", false)?,
-            bitgo_base_url: env::var("BITGO_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:3080".to_string())
-                .trim()
-                .to_string(),
-            bitgo_access_token: required_env("BITGO_ACCESS_TOKEN")?,
-            bitgo_wallet_id: required_env("BITGO_WALLET_ID")?,
-            bitgo_coin: env::var("BITGO_COIN")
-                .unwrap_or_else(|_| "gteth".to_string())
-                .trim()
-                .to_string(),
+            privacy_pool_address: required_env("PRIVACY_POOL_ADDRESS")?,
+            relayer_private_key: required_env("RELAYER_PRIVATE_KEY")?,
         })
     }
 }
@@ -205,10 +197,8 @@ mod tests {
             "CONVEX_SITE_URL",
             "CONVEX_ADMIN_KEY",
             "SWEEPER_DRY_RUN",
-            "BITGO_BASE_URL",
-            "BITGO_ACCESS_TOKEN",
-            "BITGO_WALLET_ID",
-            "BITGO_COIN",
+            "PRIVACY_POOL_ADDRESS",
+            "RELAYER_PRIVATE_KEY",
         ] {
             unsafe { env::remove_var(key) };
         }
@@ -223,9 +213,14 @@ mod tests {
             env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
             env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
-            env::set_var("BITGO_ACCESS_TOKEN", "test-token");
-            env::set_var("BITGO_WALLET_ID", "test-wallet-id");
-            env::set_var("BITGO_COIN", "gteth");
+            env::set_var(
+                "PRIVACY_POOL_ADDRESS",
+                "0x1234567890abcdef1234567890abcdef12345678",
+            );
+            env::set_var(
+                "RELAYER_PRIVATE_KEY",
+                "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            );
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -245,10 +240,14 @@ mod tests {
         assert_eq!(config.convex.site_url, None);
         assert_eq!(config.convex.admin_key, None);
         assert!(!config.sweeper.dry_run);
-        assert_eq!(config.sweeper.bitgo_base_url, "http://localhost:3080");
-        assert_eq!(config.sweeper.bitgo_access_token, "test-token");
-        assert_eq!(config.sweeper.bitgo_wallet_id, "test-wallet-id");
-        assert_eq!(config.sweeper.bitgo_coin, "gteth");
+        assert_eq!(
+            config.sweeper.privacy_pool_address,
+            "0x1234567890abcdef1234567890abcdef12345678"
+        );
+        assert_eq!(
+            config.sweeper.relayer_private_key,
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
     }
 
     #[test]
@@ -274,8 +273,8 @@ mod tests {
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
             env::set_var("CONVEX_SITE_URL", "https://example.convex.site");
             env::set_var("CONVEX_ADMIN_KEY", "test-admin-key");
-            env::set_var("BITGO_ACCESS_TOKEN", "test-token");
-            env::set_var("BITGO_WALLET_ID", "test-wallet-id-2");
+            env::set_var("PRIVACY_POOL_ADDRESS", "0xaabbccdd");
+            env::set_var("RELAYER_PRIVATE_KEY", "0x1111");
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -288,6 +287,6 @@ mod tests {
             Some("https://example.convex.site")
         );
         assert_eq!(config.convex.admin_key.as_deref(), Some("test-admin-key"));
-        assert_eq!(config.sweeper.bitgo_wallet_id, "test-wallet-id-2");
+        assert_eq!(config.sweeper.privacy_pool_address, "0xaabbccdd");
     }
 }

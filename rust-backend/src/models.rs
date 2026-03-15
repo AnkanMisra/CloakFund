@@ -460,6 +460,67 @@ impl NewDeposit {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ZK-Mixer (Privacy Pool) Models
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Request payload for the `POST /api/v1/withdraw` relayer endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawRequest {
+    /// Hex-encoded 32-byte secret (with or without 0x prefix)
+    pub secret_hex: String,
+    /// Hex-encoded 32-byte nullifier (with or without 0x prefix)
+    pub nullifier_hex: String,
+    /// The destination wallet address to receive the withdrawn ETH
+    pub recipient_address: String,
+}
+
+/// Response payload for the `POST /api/v1/withdraw` relayer endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawResponse {
+    pub status: String,
+    pub tx_hash: String,
+    pub recipient: String,
+}
+
+/// A privacy note record stored in Convex. This holds the secret and nullifier
+/// needed to later withdraw from the PrivacyPool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivacyNoteRecord {
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_creationTime")]
+    pub creation_time: f64,
+    /// The deposit ID this note is associated with
+    pub deposit_id: String,
+    /// The sweep job ID this note was created for
+    pub sweep_job_id: String,
+    /// Hex-encoded 32-byte secret
+    pub secret_hex: String,
+    /// Hex-encoded 32-byte nullifier
+    pub nullifier_hex: String,
+    /// Hex-encoded 32-byte commitment
+    pub commitment_hex: String,
+    /// The tx hash of the deposit into the PrivacyPool contract
+    pub pool_deposit_tx_hash: Option<String>,
+}
+
+/// Arguments for creating a new privacy note in Convex.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewPrivacyNote {
+    pub deposit_id: String,
+    pub sweep_job_id: String,
+    pub secret_hex: String,
+    pub nullifier_hex: String,
+    pub commitment_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_deposit_tx_hash: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

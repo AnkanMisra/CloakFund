@@ -1,30 +1,28 @@
-use anyhow::Context;
+
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::HeaderValue,
+    extract::{Path, Query, State},
+
     response::IntoResponse,
     routing::{get, post},
 };
+use ethers::prelude::*;
 use serde_json::json;
+use std::str::FromStr;
 use std::sync::Arc;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::convex_client::ConvexRepository;
+use crate::privacy_pool;
 
 #[path = "ccip.rs"]
 pub mod ccip;
 
 pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
-    let frontend_url =
-        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-
+    // Allow any origin in development so the frontend can run from
+    // file://, localhost:5500, or any other local dev server.
     let cors = CorsLayer::new()
-        .allow_origin(
-            frontend_url
-                .parse::<HeaderValue>()
-                .context("FRONTEND_URL is not a valid HTTP header value")?,
-        )
+        .allow_origin(tower_http::cors::Any)
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
         .allow_headers(tower_http::cors::Any);
 
@@ -34,7 +32,8 @@ pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
         .route("/api/v1/paylink", post(create_paylink))
         .route("/api/v1/paylink/:id", get(get_paylink))
         .route("/api/v1/consolidate", post(consolidate_funds))
-        .route("/api/v1/bitgo/webhook", post(bitgo_webhook))
+        .route("/api/v1/withdraw", post(relay_withdraw))
+        .route("/api/v1/deposit/status", get(deposit_status))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state))
@@ -45,6 +44,7 @@ async fn health_check() -> impl IntoResponse {
     Json(json!({
         "status": "ok",
         "service": "cloakfund-rust-backend",
+        "mode": "zk-mixer",
         "timestamp": timestamp,
     }))
 }
@@ -52,18 +52,65 @@ async fn health_check() -> impl IntoResponse {
 async fn resolve_ens_pubkey(ens_name: &str) -> anyhow::Result<String> {
     use ethers::prelude::*;
 
-    let rpc_url = std::env::var("ETH_MAINNET_RPC_URL")
-        .unwrap_or_else(|_| "https://eth.llamarpc.com".to_string());
+    // Try the user-configured RPC first, then fall back to free public RPCs
+    let configured = std::env::var("ETH_MAINNET_RPC_URL").ok();
+    let fallback_rpcs: Vec<String> = vec![
+        "https://cloudflare-eth.com".to_string(),
+        "https://rpc.ankr.com/eth".to_string(),
+        "https://ethereum-rpc.publicnode.com".to_string(),
+        "https://eth.llamarpc.com".to_string(),
+    ];
 
-    let provider = Provider::<Http>::try_from(rpc_url)?;
+    let mut rpcs: Vec<String> = Vec::new();
+    if let Some(configured_rpc) = configured {
+        rpcs.push(configured_rpc);
+    }
+    rpcs.extend(fallback_rpcs);
 
-    let pubkey = provider.resolve_field(ens_name, "cloak.pubkey").await?;
+    let mut last_error = String::new();
 
-    if pubkey.is_empty() {
-        anyhow::bail!("No cloak.pubkey text record found");
+    for rpc_url in &rpcs {
+        tracing::debug!("Trying ENS resolution via RPC: {}", rpc_url);
+        match Provider::<Http>::try_from(rpc_url.as_str()) {
+            Ok(provider) => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(8),
+                    provider.resolve_field(ens_name, "cloak.pubkey"),
+                )
+                .await
+                {
+                    Ok(Ok(pubkey)) if !pubkey.is_empty() => {
+                        tracing::info!("ENS resolved via {}: got pubkey", rpc_url);
+                        return Ok(pubkey);
+                    }
+                    Ok(Ok(_)) => {
+                        last_error = format!("No cloak.pubkey text record found for {}", ens_name);
+                        tracing::warn!("{} (via {})", last_error, rpc_url);
+                        // Don't try other RPCs — the ENS record genuinely doesn't exist
+                        return Err(anyhow::anyhow!("{}", last_error));
+                    }
+                    Ok(Err(e)) => {
+                        last_error = format!("{}", e);
+                        tracing::warn!("ENS resolution failed via {}: {}", rpc_url, e);
+                    }
+                    Err(_) => {
+                        last_error = "timeout after 8s".to_string();
+                        tracing::warn!("ENS resolution timed out via {}", rpc_url);
+                    }
+                }
+            }
+            Err(e) => {
+                last_error = format!("Invalid RPC URL: {}", e);
+                tracing::warn!("{}", last_error);
+            }
+        }
     }
 
-    Ok(pubkey)
+    anyhow::bail!(
+        "All ENS RPCs failed for {}. Last error: {}",
+        ens_name,
+        last_error
+    )
 }
 
 async fn create_paylink(
@@ -171,19 +218,6 @@ async fn consolidate_funds(
     State(state): State<Arc<ConvexRepository>>,
     Json(payload): Json<ConsolidateRequest>,
 ) -> impl IntoResponse {
-    // Note: To fully satisfy the confirmation check, we should ideally verify
-    // the deposit's status here or in the `createSweepJob` Convex mutation.
-    // If a `get_deposit` method is available on ConvexRepository, it would look like:
-    //
-    // if let Ok(Some(deposit)) = state.get_deposit(&payload.deposit_id).await {
-    //     if deposit.confirmation_status != "confirmed" {
-    //         return (
-    //             axum::http::StatusCode::BAD_REQUEST,
-    //             Json(json!({ "error": "Deposit is not confirmed" })),
-    //         ).into_response();
-    //     }
-    // }
-
     match state.create_sweep_job(&payload.deposit_id).await {
         Ok(job_id) => (
             axum::http::StatusCode::ACCEPTED,
@@ -198,78 +232,250 @@ async fn consolidate_funds(
     }
 }
 
-async fn bitgo_webhook(
+// ─────────────────────────────────────────────────────────────────────────────
+//  ZK-Mixer Relayer Endpoint
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// POST /api/v1/withdraw
+///
+/// The Relayer endpoint for anonymous withdrawals from the PrivacyPool.
+/// The receiver submits their secret note (secret + nullifier) and their
+/// destination wallet address. The Rust backend uses its own relayer wallet
+/// to pay gas and call PrivacyPool.withdraw() on-chain.
+///
+/// This breaks the on-chain link: the receiver's main wallet never had to
+/// interact with the stealth address or the PrivacyPool directly.
+async fn relay_withdraw(
     State(_state): State<Arc<ConvexRepository>>,
-    headers: axum::http::HeaderMap,
-    body: axum::body::Bytes,
+    Json(payload): Json<crate::models::WithdrawRequest>,
 ) -> impl IntoResponse {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
+    // ── Validate & parse inputs ──────────────────────────────────────────
+    let secret_hex = payload.secret_hex.trim_start_matches("0x");
+    let nullifier_hex = payload.nullifier_hex.trim_start_matches("0x");
 
-    let signature = match headers.get("BitGo-Signature").and_then(|v| v.to_str().ok()) {
-        Some(sig) => sig,
-        None => {
+    let secret_bytes = match hex::decode(secret_hex) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        _ => {
             return (
-                axum::http::StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Missing signature" })),
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid secret: must be 32 bytes hex-encoded" })),
             )
                 .into_response();
         }
     };
 
-    let secret = std::env::var("BITGO_WEBHOOK_SECRET").unwrap_or_default();
-    if secret.is_empty() {
-        tracing::warn!("BITGO_WEBHOOK_SECRET is not set; rejecting webhook");
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "Webhook secret not configured" })),
-        )
-            .into_response();
-    }
-
-    let mut mac = match Hmac::<Sha256>::new_from_slice(secret.as_bytes()) {
-        Ok(mac) => mac,
-        Err(_) => {
+    let nullifier_bytes = match hex::decode(nullifier_hex) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        _ => {
             return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Invalid HMAC secret" })),
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid nullifier: must be 32 bytes hex-encoded" })),
             )
                 .into_response();
         }
     };
 
-    mac.update(&body);
-    let expected_sig = hex::encode(mac.finalize().into_bytes());
-
-    if signature != expected_sig {
-        tracing::warn!("Invalid BitGo webhook signature");
-        return (
-            axum::http::StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Invalid signature" })),
-        )
-            .into_response();
-    }
-
-    let payload: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(p) => p,
+    let recipient = match Address::from_str(&payload.recipient_address) {
+        Ok(addr) => addr,
         Err(_) => {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid JSON body" })),
+                Json(json!({ "error": "Invalid recipient_address" })),
             )
                 .into_response();
         }
     };
 
-    tracing::info!("Received verified BitGo webhook: {:?}", payload);
+    // ── Load relayer config ──────────────────────────────────────────────
+    let pool_address_str = match std::env::var("PRIVACY_POOL_ADDRESS") {
+        Ok(addr) => addr,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "PRIVACY_POOL_ADDRESS not configured" })),
+            )
+                .into_response();
+        }
+    };
 
-    // In a complete implementation, we'd parse the BitGo webhook payload
-    // and trigger updates in Convex (e.g., mark the sweep job as completed
-    // if BitGo confirms receipt in the treasury wallet).
+    let pool_address = match Address::from_str(pool_address_str.trim()) {
+        Ok(addr) => addr,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Invalid PRIVACY_POOL_ADDRESS" })),
+            )
+                .into_response();
+        }
+    };
+
+    let relayer_key_str = match std::env::var("RELAYER_PRIVATE_KEY") {
+        Ok(key) => key,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "RELAYER_PRIVATE_KEY not configured" })),
+            )
+                .into_response();
+        }
+    };
+
+    let rpc_url =
+        std::env::var("BASE_RPC_URL").unwrap_or_else(|_| "https://sepolia.base.org".to_string());
+
+    let chain_id: u64 = std::env::var("BASE_CHAIN_ID")
+        .unwrap_or_else(|_| "84532".to_string())
+        .parse()
+        .unwrap_or(84532);
+
+    // ── Build provider and wallet ────────────────────────────────────────
+    let provider = match Provider::<Http>::try_from(rpc_url.as_str()) {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Failed to connect to RPC: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    let relayer_key_hex = relayer_key_str.trim().trim_start_matches("0x");
+    let relayer_wallet = match relayer_key_hex
+        .parse::<LocalWallet>()
+        .map(|w| w.with_chain_id(chain_id))
+    {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!("Invalid RELAYER_PRIVATE_KEY: {:?}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Invalid relayer key configuration" })),
+            )
+                .into_response();
+        }
+    };
+
+    tracing::info!(
+        "🔄 Relaying withdrawal: recipient={:?}, pool={:?}",
+        recipient,
+        pool_address
+    );
+
+    // ── Execute the on-chain withdrawal ──────────────────────────────────
+    match privacy_pool::execute_pool_withdraw(
+        provider,
+        relayer_wallet,
+        pool_address,
+        &secret_bytes,
+        &nullifier_bytes,
+        recipient,
+        chain_id,
+    )
+    .await
+    {
+        Ok(tx_hash) => {
+            let response = crate::models::WithdrawResponse {
+                status: "submitted".to_string(),
+                tx_hash: format!("{:#x}", tx_hash),
+                recipient: format!("{:#x}", recipient),
+            };
+            (axum::http::StatusCode::OK, Json(response)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("❌ Withdrawal relay failed: {:?}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Withdrawal failed: {}", e) })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Query parameters for the deposit status endpoint.
+#[derive(serde::Deserialize)]
+struct DepositStatusQuery {
+    #[serde(rename = "txHash")]
+    tx_hash: Option<String>,
+    #[serde(rename = "stealthAddress")]
+    stealth_address: Option<String>,
+}
+
+/// GET /api/v1/deposit/status?txHash=0x...&stealthAddress=0x...
+///
+/// Returns the deposit record, sweep status, and privacy note for tracking.
+async fn deposit_status(
+    State(state): State<Arc<ConvexRepository>>,
+    Query(params): Query<DepositStatusQuery>,
+) -> impl IntoResponse {
+    // Try by txHash first
+    if let Some(ref tx_hash) = params.tx_hash {
+        match state.get_deposits_by_tx_hash(tx_hash).await {
+            Ok(deposits) => {
+                if let Some(deposit) = deposits.as_array().and_then(|a| a.first()) {
+                    let deposit_id = deposit["depositId"].as_str().unwrap_or("");
+
+                    // Also fetch privacy note
+                    let note = state
+                        .get_privacy_note(deposit_id)
+                        .await
+                        .ok()
+                        .flatten();
+
+                    // Fetch sweep job status
+                    let sweep_status = deposit.get("sweepStatus")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+
+                    return (
+                        axum::http::StatusCode::OK,
+                        Json(json!({
+                            "deposit": deposit,
+                            "sweepStatus": sweep_status,
+                            "note": note,
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to query deposit by tx hash: {:?}", e);
+            }
+        }
+    }
+
+    // Try by stealth address — look up the ephemeral address match
+    if let Some(ref addr) = params.stealth_address {
+        match state.get_ephemeral_address_match(84532, addr).await {
+            Ok(Some(matched)) => {
+                return (
+                    axum::http::StatusCode::OK,
+                    Json(json!({
+                        "matched": matched,
+                        "status": "found_address",
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!("Failed to query ephemeral address: {:?}", e);
+            }
+        }
+    }
 
     (
-        axum::http::StatusCode::OK,
-        Json(json!({ "status": "acknowledged" })),
+        axum::http::StatusCode::NOT_FOUND,
+        Json(json!({ "error": "No deposit found for the given query" })),
     )
         .into_response()
 }
@@ -283,18 +489,5 @@ mod tests {
     async fn test_health_check() {
         let response = health_check().await.into_response();
         assert_eq!(response.status(), StatusCode::OK);
-
-        // Can't easily test create_paylink and get_paylink here without mocking ConvexRepository,
-        // which requires a live Convex backend or an extracted trait.
-        // Full API endpoint testing should happen in integration tests.
-    }
-
-    #[tokio::test]
-    async fn test_bitgo_webhook_response() {
-        // Since bitgo_webhook takes an Arc<ConvexRepository> state we can mock it here
-        // or since it doesn't currently use the state we could pass a dummy.
-        // However, it's easier to test the router indirectly in integration tests or
-        // modify the signature.
-        // This is a placeholder test to ensure it compiles.
     }
 }

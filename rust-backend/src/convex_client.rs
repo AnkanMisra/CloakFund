@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use crate::config::ConvexClientConfig;
 use crate::models::{
     ConfirmationUpdateResult, DepositMatch, DepositRecord, DepositStatusResponse, NewDeposit,
-    SweepJobRecord, UpsertDepositResult, WatcherCheckpoint,
+    NewPrivacyNote, PrivacyNoteRecord, SweepJobRecord, UpsertDepositResult, WatcherCheckpoint,
 };
 
 /// A repository interface for interacting with the Convex backend functions.
@@ -489,6 +489,87 @@ impl ConvexRepository {
                 let count: u64 = serde_json::from_value(convex_to_json(val))?;
                 Ok(count)
             }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  Privacy Notes (ZK-Mixer)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Stores a privacy note (secret + nullifier + commitment) in Convex.
+    /// Called by the sweeper after depositing into the PrivacyPool contract.
+    pub async fn store_privacy_note(&self, note: &NewPrivacyNote) -> Result<String> {
+        let json_val = serde_json::to_value(note)?;
+        let convex_val = json_to_convex(json_val);
+
+        let args = if let convex::Value::Object(map) = convex_val {
+            map
+        } else {
+            anyhow::bail!("Invalid privacy note object")
+        };
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("notes:createPrivacyNote", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let id: String = serde_json::from_value(convex_to_json(val))?;
+                Ok(id)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Retrieves a privacy note by deposit ID from Convex.
+    pub async fn get_privacy_note(&self, deposit_id: &str) -> Result<Option<PrivacyNoteRecord>> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "depositId".to_string(),
+            convex::Value::String(deposit_id.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.query("notes:getNoteByDeposit", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let json = convex_to_json(val);
+                if json.is_null() {
+                    Ok(None)
+                } else {
+                    let note: PrivacyNoteRecord = serde_json::from_value(json)?;
+                    Ok(Some(note))
+                }
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Queries deposits by transaction hash.
+    pub async fn get_deposits_by_tx_hash(&self, tx_hash: &str) -> Result<serde_json::Value> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "txHash".to_string(),
+            convex::Value::String(tx_hash.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client
+            .query("deposits:getDepositsByTxHash", args)
+            .await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
             convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
             convex::FunctionResult::ConvexError(err) => {
                 anyhow::bail!("Convex logic error: {}", err.message)

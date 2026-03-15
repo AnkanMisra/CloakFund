@@ -5,20 +5,26 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::privacy_pool::{DENOMINATION_WEI, DEPOSIT_GAS_LIMIT, encode_deposit_calldata};
+
 /// A securely zeroized wrapper around an ephemeral private key.
 /// Ensures that the sensitive key material is wiped from memory when dropped.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct EphemeralPrivateKey(pub [u8; 32]);
 
 pub enum SweepOutcome {
-    Success(H256),
+    /// Deposit into PrivacyPool succeeded — returns (tx_hash, commitment_hex)
+    Success(H256, String),
     SkippedZeroBalance,
-    SkippedDust { balance: U256, max_gas_cost: U256 },
+    SkippedDust {
+        balance: U256,
+        max_gas_cost: U256,
+    },
     SkippedDryRun,
 }
 
 /// Handles the consolidation/sweeping of funds from ephemeral stealth addresses
-/// to the centralized treasury (e.g., BitGo vault).
+/// into the PrivacyPool smart contract via `deposit(commitment)`.
 ///
 /// Generic over the provider type P so it works with both `Provider<Http>`
 /// (used by the sweeper) and `Provider<Ws>` (used by the watcher).
@@ -38,22 +44,23 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
         }
     }
 
-    /// Sweeps the entire native balance (ETH) from the ephemeral stealth address
-    /// to the treasury using proper EIP-1559 fee calculation.
+    /// Sweeps the native balance from an ephemeral stealth address into the
+    /// PrivacyPool smart contract via `deposit(commitment)`.
     ///
-    /// This implementation:
-    /// 1. Reads `base_fee_per_gas` from the latest block
-    /// 2. Queries the network's suggested priority fee
-    /// 3. Computes `max_fee_per_gas = (base_fee × 2) + priority_fee`
-    /// 4. Calculates `max_gas_cost = gas_limit × max_fee_per_gas`
-    /// 5. Applies a 5% safety buffer
-    /// 6. Builds an explicit EIP-1559 transaction (no legacy conversion)
-    /// 7. Re-checks balance before broadcast to prevent race conditions
+    /// This replaces the old plain-ETH-transfer consolidation. Instead of
+    /// sending funds to a treasury wallet, we:
+    ///   1. Generate a cryptographic Note (secret + nullifier)
+    ///   2. Compute commitment = SHA-256(secret || nullifier)
+    ///   3. Call PrivacyPool.deposit(commitment) with exactly 0.0001 ETH
+    ///   4. Return the tx hash and commitment for the caller to persist
+    ///
+    /// The ephemeral key is zeroized after the transaction is signed.
     pub async fn sweep_native(
         &self,
         ephemeral_key: EphemeralPrivateKey,
         from_address: Address,
-        destination_address: Address,
+        pool_address: Address,
+        commitment: &[u8; 32],
     ) -> Result<SweepOutcome> {
         let wallet = LocalWallet::from_bytes(&ephemeral_key.0)
             .context("Failed to construct wallet from ephemeral private key")?
@@ -90,7 +97,6 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
         }
 
         // ── Step 2: Get EIP-1559 fee parameters ────────────────────────────
-        // Fetch base_fee_per_gas from the latest block
         let latest_block = self
             .provider
             .get_block(BlockNumber::Latest)
@@ -103,7 +109,6 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
             U256::from(1_000_000_000) // 1 gwei fallback
         });
 
-        // Fetch the network's suggested priority fee
         let priority_fee: U256 = self
             .provider
             .request("eth_maxPriorityFeePerGas", ())
@@ -114,8 +119,6 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
             });
 
         // ── Step 3: Compute EIP-1559 fee cap ───────────────────────────────
-        // max_fee = (base_fee × 2) + priority_fee
-        // Doubling base_fee ensures the tx stays valid even if base fee spikes
         let max_fee_per_gas = base_fee
             .saturating_mul(U256::from(2))
             .saturating_add(priority_fee);
@@ -127,13 +130,13 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
             base_fee, priority_fee, max_fee_per_gas
         );
 
-        // ── Step 4: Compute gas limit and max gas cost ─────────────────────
-        // Standard ETH transfer is always exactly 21000 gas
-        let gas_limit = U256::from(21_000);
+        // ── Step 4: Compute gas cost for contract call ─────────────────────
+        // Contract deposit uses ~120,000 gas, NOT the 21,000 for ETH transfers
+        let gas_limit = U256::from(DEPOSIT_GAS_LIMIT);
         let max_gas_cost = gas_limit.saturating_mul(max_fee_per_gas);
 
-        // ── Step 5: Apply 5% safety buffer ─────────────────────────────────
-        let buffer = max_gas_cost / 20; // 5%
+        // 5% safety buffer
+        let buffer = max_gas_cost / 20;
         let total_gas_reservation = max_gas_cost.saturating_add(buffer);
 
         debug!(
@@ -141,78 +144,83 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
             gas_limit, max_gas_cost, buffer, total_gas_reservation
         );
 
-        // ── Step 6: Dust detection ─────────────────────────────────────────
-        if balance <= total_gas_reservation {
+        // ── Step 5: Check balance covers denomination + gas ────────────────
+        let denomination = U256::from(DENOMINATION_WEI);
+        let total_required = denomination.saturating_add(total_gas_reservation);
+
+        if balance < total_required {
             warn!(
-                "Dust detected: balance ({}) cannot cover gas ({}) for {:?}",
-                balance, total_gas_reservation, from_address
+                "Insufficient balance for deposit: balance={}, required={} (denomination={}, gas={})",
+                balance, total_required, denomination, total_gas_reservation
             );
             return Ok(SweepOutcome::SkippedDust {
                 balance,
-                max_gas_cost: total_gas_reservation,
+                max_gas_cost: total_required,
             });
         }
 
-        // ── Step 7: Compute sweep amount ───────────────────────────────────
-        let sweep_amount = balance.saturating_sub(total_gas_reservation);
+        // ── Step 6: Build deposit transaction ──────────────────────────────
+        let calldata = encode_deposit_calldata(commitment);
 
-        info!(
-            "Sweep plan: {:?} → {:?} | amount={} wei | gas_reserved={} wei",
-            from_address, destination_address, sweep_amount, total_gas_reservation
-        );
-
-        // ── Step 8: Build EIP-1559 transaction ─────────────────────────────
         let tx = Eip1559TransactionRequest::new()
-            .to(destination_address)
-            .value(sweep_amount)
+            .to(pool_address)
+            .value(denomination)
+            .data(calldata)
             .gas(gas_limit)
             .max_fee_per_gas(max_fee_per_gas)
             .max_priority_fee_per_gas(max_priority_fee_per_gas)
             .chain_id(self.chain_id);
 
+        let commitment_hex = hex::encode(commitment);
+
+        info!(
+            "Sweep plan: {:?} → PrivacyPool {:?} | deposit commitment=0x{} | denomination={} wei",
+            from_address, pool_address, commitment_hex, denomination
+        );
+
         debug!(
-            "Built EIP-1559 tx: to={:?}, value={}, gas={}, max_fee={}, max_priority_fee={}",
-            destination_address, sweep_amount, gas_limit, max_fee_per_gas, max_priority_fee_per_gas
+            "Built EIP-1559 contract tx: to={:?}, value={}, gas={}, max_fee={}, max_priority_fee={}",
+            pool_address, denomination, gas_limit, max_fee_per_gas, max_priority_fee_per_gas
         );
 
         if self.dry_run {
             info!(
-                "DRY RUN: Skipping broadcast for {:?} (would sweep {} wei to {:?})",
-                from_address, sweep_amount, destination_address
+                "DRY RUN: Skipping broadcast for {:?} (would deposit {} wei to PrivacyPool {:?})",
+                from_address, denomination, pool_address
             );
             return Ok(SweepOutcome::SkippedDryRun);
         }
 
-        // ── Step 9: Pre-broadcast balance recheck ──────────────────────────
+        // ── Step 7: Pre-broadcast balance recheck ──────────────────────────
         let recheck_balance = client
             .get_balance(from_address, None)
             .await
             .context("Failed to recheck balance before broadcast")?;
 
-        if recheck_balance < sweep_amount.saturating_add(total_gas_reservation) {
+        if recheck_balance < total_required {
             warn!(
                 "Balance changed between estimation and broadcast: was {}, now {}. Aborting.",
                 balance, recheck_balance
             );
             return Ok(SweepOutcome::SkippedDust {
                 balance: recheck_balance,
-                max_gas_cost: total_gas_reservation,
+                max_gas_cost: total_required,
             });
         }
 
-        // ── Step 10: Broadcast ─────────────────────────────────────────────
+        // ── Step 8: Broadcast ─────────────────────────────────────────────
         let pending_tx = client
             .send_transaction(tx, None)
             .await
-            .context("Failed to send EIP-1559 sweep transaction")?;
+            .context("Failed to send PrivacyPool.deposit() transaction")?;
 
         let tx_hash = pending_tx.tx_hash();
         info!(
-            "✅ Broadcasted EIP-1559 sweep tx {:#x} from {:?} ({} wei → {:?})",
-            tx_hash, from_address, sweep_amount, destination_address
+            "✅ Broadcasted PrivacyPool.deposit() tx {:#x} from {:?} (commitment=0x{})",
+            tx_hash, from_address, commitment_hex
         );
 
-        Ok(SweepOutcome::Success(tx_hash))
+        Ok(SweepOutcome::Success(tx_hash, commitment_hex))
     }
 
     /// Placeholder for ERC20 sweeping logic.
@@ -221,7 +229,7 @@ impl<P: JsonRpcClient + 'static> Consolidator<P> {
         _ephemeral_key: EphemeralPrivateKey,
         _from_address: Address,
         _token_address: Address,
-        _destination_address: Address,
+        _pool_address: Address,
     ) -> Result<SweepOutcome> {
         warn!("ERC20 sweeping not yet implemented.");
         Ok(SweepOutcome::SkippedZeroBalance) // Placeholder
