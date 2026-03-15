@@ -8,6 +8,12 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
+    // Load environment variables from .env or .env.local files
+    let _ = dotenvy::from_filename("../.env");
+    let _ = dotenvy::dotenv();
+    let _ = dotenvy::from_filename("../.env.local");
+    let _ = dotenvy::from_filename(".env.local");
+
     tracing_subscriber::fmt::init();
 
     let args: Vec<String> = env::args().collect();
@@ -47,7 +53,7 @@ async fn main() {
                 return;
             }
             match stealth::recover_stealth_private_key(&args[2], &args[3]) {
-                Ok(priv_key) => println!("Stealth Private Key: {}", priv_key),
+                Ok(priv_key) => println!("Stealth Private Key: 0x{}", hex::encode(*priv_key)),
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
@@ -61,13 +67,21 @@ async fn run_server() -> anyhow::Result<()> {
     info!("Initializing Convex client...");
     let convex = Arc::new(ConvexRepository::new(&config.convex).await?);
 
-    info!("Fetching last watcher checkpoint...");
-    if let Ok(Some(checkpoint)) = convex.get_latest_checkpoint().await {
-        let resume_block = checkpoint
-            .latest_processed_block
-            .unwrap_or(checkpoint.start_block);
-        config.watcher.start_block = Some(resume_block);
-        info!("Resuming watcher from block {}", resume_block);
+    // WATCHER_START_BLOCK env var takes priority; only fall back to checkpoint
+    if let Some(start_block) = config.watcher.start_block {
+        info!(
+            "WATCHER_START_BLOCK override: starting from block {}",
+            start_block
+        );
+    } else {
+        info!("Fetching last watcher checkpoint...");
+        if let Ok(Some(checkpoint)) = convex.get_latest_checkpoint().await {
+            let resume_block = checkpoint
+                .latest_processed_block
+                .unwrap_or(checkpoint.start_block);
+            config.watcher.start_block = Some(resume_block);
+            info!("Resuming watcher from block {}", resume_block);
+        }
     }
 
     info!("Starting watcher service...");
@@ -78,8 +92,13 @@ async fn run_server() -> anyhow::Result<()> {
         }
     });
 
+    // Create a SEPARATE Convex client for the sweeper to avoid
+    // mutex contention with the watcher's frequent checkpoint updates.
+    info!("Initializing dedicated sweeper Convex client...");
+    let sweeper_convex = Arc::new(ConvexRepository::new(&config.convex).await?);
+
     info!("Starting sweeper service...");
-    let sweeper = SweeperService::new(config.watcher.clone(), convex.clone());
+    let mut sweeper = SweeperService::new(config.watcher.clone(), sweeper_convex);
     tokio::spawn(async move {
         if let Err(e) = sweeper.start().await {
             error!("Sweeper service failed: {}", e);

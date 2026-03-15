@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use crate::config::ConvexClientConfig;
 use crate::models::{
     ConfirmationUpdateResult, DepositMatch, DepositRecord, DepositStatusResponse, NewDeposit,
-    SweepJobRecord, UpsertDepositResult, WatcherCheckpoint,
+    NewPrivacyNote, PrivacyNoteRecord, SweepJobRecord, UpsertDepositResult, WatcherCheckpoint,
 };
 
 /// A repository interface for interacting with the Convex backend functions.
@@ -175,6 +175,33 @@ impl ConvexRepository {
                     let match_res: DepositMatch = serde_json::from_value(json)?;
                     Ok(Some(match_res))
                 }
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Fetches all active (announced) stealth addresses for a given chain in a single query.
+    /// Used by the watcher to build an in-memory lookup set instead of querying per-transaction.
+    pub async fn get_active_stealth_addresses(&self, chain_id: u64) -> Result<Vec<DepositMatch>> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "chainId".to_string(),
+            convex::Value::Float64(chain_id as f64),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client
+            .query("paylinks:getActiveStealthAddresses", args)
+            .await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let json = convex_to_json(val);
+                let matches: Vec<DepositMatch> = serde_json::from_value(json)?;
+                Ok(matches)
             }
             convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
             convex::FunctionResult::ConvexError(err) => {
@@ -393,6 +420,7 @@ impl ConvexRepository {
         job_id: &str,
         status: &str,
         sweep_tx_hash: Option<String>,
+        destination_address: Option<String>,
     ) -> Result<()> {
         let mut args = std::collections::BTreeMap::new();
         args.insert(
@@ -406,12 +434,142 @@ impl ConvexRepository {
         if let Some(hash) = sweep_tx_hash {
             args.insert("sweepTxHash".to_string(), convex::Value::String(hash));
         }
+        if let Some(addr) = destination_address {
+            args.insert(
+                "destinationAddress".to_string(),
+                convex::Value::String(addr),
+            );
+        }
 
         let mut client = self.client.lock().await;
         let result = client.mutation("sweeps:updateSweepJobStatus", args).await?;
 
         match result {
             convex::FunctionResult::Value(_) => Ok(()),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Creates a sweep job manually for a given deposit ID.
+    pub async fn create_sweep_job(&self, deposit_id: &str) -> Result<String> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "depositId".to_string(),
+            convex::Value::String(deposit_id.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("sweeps:createSweepJob", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let id: String = serde_json::from_value(convex_to_json(val))?;
+                Ok(id)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Resets any sweep jobs stuck in "broadcasting" status back to "queued".
+    /// Should be called on sweeper startup to recover from crashes.
+    pub async fn reset_stuck_sweep_jobs(&self) -> Result<u64> {
+        let args = std::collections::BTreeMap::new();
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("sweeps:resetStuckJobs", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let count: u64 = serde_json::from_value(convex_to_json(val))?;
+                Ok(count)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  Privacy Notes (ZK-Mixer)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Stores a privacy note (secret + nullifier + commitment) in Convex.
+    /// Called by the sweeper after depositing into the PrivacyPool contract.
+    pub async fn store_privacy_note(&self, note: &NewPrivacyNote) -> Result<String> {
+        let json_val = serde_json::to_value(note)?;
+        let convex_val = json_to_convex(json_val);
+
+        let args = if let convex::Value::Object(map) = convex_val {
+            map
+        } else {
+            anyhow::bail!("Invalid privacy note object")
+        };
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("notes:createPrivacyNote", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let id: String = serde_json::from_value(convex_to_json(val))?;
+                Ok(id)
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Retrieves a privacy note by deposit ID from Convex.
+    pub async fn get_privacy_note(&self, deposit_id: &str) -> Result<Option<PrivacyNoteRecord>> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "depositId".to_string(),
+            convex::Value::String(deposit_id.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.query("notes:getNoteByDeposit", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => {
+                let json = convex_to_json(val);
+                if json.is_null() {
+                    Ok(None)
+                } else {
+                    let note: PrivacyNoteRecord = serde_json::from_value(json)?;
+                    Ok(Some(note))
+                }
+            }
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
+    /// Queries deposits by transaction hash.
+    pub async fn get_deposits_by_tx_hash(&self, tx_hash: &str) -> Result<serde_json::Value> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "txHash".to_string(),
+            convex::Value::String(tx_hash.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client
+            .query("deposits:getDepositsByTxHash", args)
+            .await?;
+
+        match result {
+            convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
             convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
             convex::FunctionResult::ConvexError(err) => {
                 anyhow::bail!("Convex logic error: {}", err.message)
@@ -450,7 +608,12 @@ fn convex_to_json(cvx: convex::Value) -> serde_json::Value {
         convex::Value::Null => serde_json::Value::Null,
         convex::Value::Int64(i) => serde_json::Value::Number(i.into()),
         convex::Value::Float64(f) => {
-            if let Some(n) = serde_json::Number::from_f64(f) {
+            // Convex stores ALL numbers as Float64. When the value is a whole
+            // number (e.g. block_number 38834007.0), emit it as a JSON integer
+            // so serde can deserialize it into Rust integer types (u64, i64, etc.).
+            if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 {
+                serde_json::Value::Number((f as i64).into())
+            } else if let Some(n) = serde_json::Number::from_f64(f) {
                 serde_json::Value::Number(n)
             } else {
                 serde_json::Value::Null

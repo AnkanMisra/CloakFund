@@ -12,15 +12,24 @@ This document tracks the implementation progress of CloakFund across all phases 
 
 ## Phase 2: Deposit Watcher / Indexer
 - **Status**: `done`
-- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented, including a dedicated `checkpoints` table for accurate watcher resumption. Rust backend `models`, `config`, `convex_client`, and `watcher` (via `ethers-rs`) are implemented to subscribe to Base WSS and sync with Convex. Added ERC20 parsing, reorg handling, rate-limited catch-up, and a demonstration script (`watcher_test.sh`). SSE/WebSocket push will be handled by Convex real-time subscriptions in Phase 4.
+- **Notes**: Pivoted from Postgres to Convex for persistence. Convex schema and backend functions (`paylinks`, `deposits`, `http`) are implemented, including a dedicated `checkpoints` table for accurate watcher resumption. Rust backend `models`, `config`, `convex_client`, and `watcher` (via `ethers-rs`) are implemented to subscribe to Base WSS and sync with Convex. Added ERC20 parsing, reorg handling, rate-limited catch-up, and a demonstration script (`watcher_test.sh`). SSE/WebSocket push will be handled by Convex real-time subscriptions in Phase 5.
+- **Post-completion fixes applied**:
+  - Fixed silent error swallowing in `process_block` — all Convex query errors are now logged.
+  - Added stealth address caching (`CACHE_REFRESH_INTERVAL = 50 blocks`) to eliminate per-tx Convex queries.
+  - Added transaction receipt verification (`receipt.status == 1`) to reject reverted transactions.
+  - Explicit lowercase normalization on all address comparisons.
+  - Fixed startup block gap: watcher now subscribes to new blocks FIRST, then fills historical gap, preventing missed blocks.
+  - Added `process_block_native_only` for catch-up — skips expensive ERC20 log scanning (~300-500ms savings/block).
+  - Added `.topic0(transfer_topic)` filter to live ERC20 scanning to reduce data fetched.
+  - Comprehensive `tracing` logs at all levels (info/debug/trace/warn/error).
 
 ## Phase 3: Paylink API & Persistence
 - **Status**: `done`
 - **Notes**: Exposed `POST /api/v1/paylink` and `GET /api/v1/paylink/:id` using Axum and persisted mappings in the Convex database using an atomic `createWithEphemeralAddress` mutation to prevent orphaned paylinks. Tested compilation and verified stealth integration with Convex data model.
 
 ## Phase 4: BitGo Consolidation Flow (Sweeper)
-- **Status**: `not_started`
-- **Notes**: Will build the consolidator module for submitting MPC signing requests to BitGo API.
+- **Status**: `done`
+- **Notes**: Implemented the `consolidator` module to securely sweep ephemeral addresses to the BitGo treasury using `ethers-rs` and `zeroize` for ephemeral key memory safety. Added the `bitgo_client` module for interacting with the BitGo Express API to comply with Sponsor Track requirements. Updated the Convex backend (`sweeps.ts`) with sweep job state machine logic (queued→broadcasting→completed/failed) and added Axum API endpoints (`/api/v1/consolidate` and `/api/v1/bitgo/webhook`) to orchestrate and monitor automated treasury flows. Added automated test script (`sweeper_test.sh`) with auto-send via `send_eth.mjs`. End-to-end test verified: paylink creation → ETH send → deposit detection → sweep job queuing.
 
 ## Phase 5: Frontend Integration (Next.js TSX)
 - **Status**: `not_started`

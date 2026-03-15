@@ -1,7 +1,9 @@
 pub mod api;
 pub mod config;
+pub mod consolidator;
 pub mod convex_client;
 pub mod models;
+pub mod privacy_pool;
 pub mod stealth;
 pub mod sweeper;
 pub mod watcher;

@@ -94,7 +94,7 @@ pub struct PaylinkRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub user_id: Option<String>,
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
@@ -110,7 +110,7 @@ pub struct EphemeralAddressRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub paylink_id: String,
     pub stealth_address: String,
     pub ephemeral_pubkey_hex: String,
@@ -126,7 +126,7 @@ pub struct DepositRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub paylink_id: String,
     pub ephemeral_address_id: String,
     pub tx_hash: String,
@@ -149,9 +149,12 @@ pub struct DepositRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPaylink {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
     pub chain_id: u64,
     pub network: String,
@@ -160,9 +163,12 @@ pub struct NewPaylink {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewPaylinkWithAddress {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ens_name: Option<String>,
     pub recipient_public_key_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
     pub chain_id: u64,
     pub network: String,
@@ -188,19 +194,26 @@ pub struct NewDeposit {
     pub paylink_id: String,
     pub ephemeral_address_id: String,
     pub tx_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log_index: Option<u64>,
     pub block_number: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub block_hash: Option<String>,
     pub from_address: String,
     pub to_address: String,
     pub asset_type: AssetType,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_address: Option<String>,
     pub amount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     pub confirmations: u64,
     pub confirmation_status: ConfirmationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detected_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_at: Option<u64>,
 }
 
@@ -366,7 +379,7 @@ pub struct DepositStatusApiResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreatePaylinkRequest {
     pub ens_name: Option<String>,
-    pub recipient_public_key_hex: String,
+    pub recipient_public_key_hex: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub chain_id: Option<u64>,
     pub network: Option<String>,
@@ -392,7 +405,7 @@ pub struct UserRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub wallet_address: String,
     pub ens_name: Option<String>,
     pub public_key_hex: String,
@@ -404,7 +417,7 @@ pub struct ReceiptRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub deposit_id: String,
     pub encrypted_payload: String,
     pub fileverse_pointer: Option<String>,
@@ -416,10 +429,15 @@ pub struct SweepJobRecord {
     #[serde(rename = "_id")]
     pub id: String,
     #[serde(rename = "_creationTime")]
-    pub creation_time: u64,
+    pub creation_time: f64,
     pub deposit_id: String,
     pub status: String,
     pub sweep_tx_hash: Option<String>,
+    pub stealth_address: String,
+    pub ephemeral_pubkey_hex: String,
+    pub amount: String,
+    pub asset_type: String,
+    pub token_address: Option<String>,
 }
 
 impl DepositRecord {
@@ -440,6 +458,67 @@ impl NewDeposit {
     pub fn normalized_asset_type(&self) -> &'static str {
         self.asset_type.as_str()
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ZK-Mixer (Privacy Pool) Models
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Request payload for the `POST /api/v1/withdraw` relayer endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawRequest {
+    /// Hex-encoded 32-byte secret (with or without 0x prefix)
+    pub secret_hex: String,
+    /// Hex-encoded 32-byte nullifier (with or without 0x prefix)
+    pub nullifier_hex: String,
+    /// The destination wallet address to receive the withdrawn ETH
+    pub recipient_address: String,
+}
+
+/// Response payload for the `POST /api/v1/withdraw` relayer endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawResponse {
+    pub status: String,
+    pub tx_hash: String,
+    pub recipient: String,
+}
+
+/// A privacy note record stored in Convex. This holds the secret and nullifier
+/// needed to later withdraw from the PrivacyPool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivacyNoteRecord {
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_creationTime")]
+    pub creation_time: f64,
+    /// The deposit ID this note is associated with
+    pub deposit_id: String,
+    /// The sweep job ID this note was created for
+    pub sweep_job_id: String,
+    /// Hex-encoded 32-byte secret
+    pub secret_hex: String,
+    /// Hex-encoded 32-byte nullifier
+    pub nullifier_hex: String,
+    /// Hex-encoded 32-byte commitment
+    pub commitment_hex: String,
+    /// The tx hash of the deposit into the PrivacyPool contract
+    pub pool_deposit_tx_hash: Option<String>,
+}
+
+/// Arguments for creating a new privacy note in Convex.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewPrivacyNote {
+    pub deposit_id: String,
+    pub sweep_job_id: String,
+    pub secret_hex: String,
+    pub nullifier_hex: String,
+    pub commitment_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_deposit_tx_hash: Option<String>,
 }
 
 #[cfg(test)]
@@ -476,7 +555,7 @@ mod tests {
     fn deposit_record_confirmation_helpers_work() {
         let confirmed = DepositRecord {
             id: "dep1".into(),
-            creation_time: 1,
+            creation_time: 1.0,
             paylink_id: "pay1".into(),
             ephemeral_address_id: "ephem1".into(),
             tx_hash: "0xabc".into(),
@@ -517,10 +596,10 @@ mod tests {
     fn test_create_paylink_request_serialization() {
         let req = CreatePaylinkRequest {
             ens_name: Some("alice.eth".to_string()),
-            recipient_public_key_hex: "0x123".to_string(),
-            metadata: Some(serde_json::json!({"item": "coffee"})),
-            chain_id: Some(8453),
-            network: Some("base".to_string()),
+            recipient_public_key_hex: Some("0x123".to_string()),
+            metadata: None,
+            chain_id: Some(1),
+            network: Some("mainnet".to_string()),
         };
 
         let json = serde_json::to_string(&req).unwrap();

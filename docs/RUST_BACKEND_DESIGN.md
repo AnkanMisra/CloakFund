@@ -28,9 +28,9 @@ Convex Client
 
 Acts as the bridge between the Rust backend and the Convex real-time database.
 
-Treasury Engine
+Treasury Engine (Sweeper & BitGo Client)
 
-Constructs consolidation transactions.
+Manages automated consolidation of funds from ephemeral stealth addresses to a central BitGo treasury vault. It uses `ethers-rs` to construct and broadcast sweep transactions and relies on the `zeroize` crate to securely clear reconstructed ephemeral private keys from memory. It also includes a BitGo REST client to interact with BitGo Express API endpoints.
 
 Encryption Service
 

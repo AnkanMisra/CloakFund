@@ -7,12 +7,14 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub watcher: WatcherConfig,
     pub convex: ConvexClientConfig,
+    pub sweeper: SweeperConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub frontend_url: String,
+    pub eth_mainnet_rpc_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,15 @@ pub struct ConvexClientConfig {
     pub admin_key: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SweeperConfig {
+    pub dry_run: bool,
+    /// The deployed PrivacyPool.sol contract address
+    pub privacy_pool_address: String,
+    /// Private key for the relayer hot-wallet (pays gas for withdrawals)
+    pub relayer_private_key: String,
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("missing required environment variable: {0}")]
@@ -49,6 +60,7 @@ impl AppConfig {
             server: ServerConfig::from_env()?,
             watcher: WatcherConfig::from_env()?,
             convex: ConvexClientConfig::from_env()?,
+            sweeper: SweeperConfig::from_env()?,
         })
     }
 }
@@ -67,9 +79,13 @@ impl ServerConfig {
         let frontend_url =
             env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
+        let eth_mainnet_rpc_url = env::var("ETH_MAINNET_RPC_URL")
+            .unwrap_or_else(|_| "https://eth.llamarpc.com".to_string());
+
         Ok(Self {
             bind_addr,
             frontend_url,
+            eth_mainnet_rpc_url,
         })
     }
 }
@@ -98,8 +114,20 @@ impl ConvexClientConfig {
     }
 }
 
+impl SweeperConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            dry_run: parse_env_or_default("SWEEPER_DRY_RUN", false)?,
+            privacy_pool_address: required_env("PRIVACY_POOL_ADDRESS")?,
+            relayer_private_key: required_env("RELAYER_PRIVATE_KEY")?,
+        })
+    }
+}
+
 fn required_env(name: &'static str) -> Result<String, ConfigError> {
-    env::var(name).map_err(|_| ConfigError::MissingVar(name))
+    env::var(name)
+        .map(|v| v.trim().to_string())
+        .map_err(|_| ConfigError::MissingVar(name))
 }
 
 fn optional_env(name: &'static str) -> Option<String> {
@@ -157,6 +185,7 @@ mod tests {
             "HOST",
             "PORT",
             "FRONTEND_URL",
+            "ETH_MAINNET_RPC_URL",
             "BASE_RPC_URL",
             "BASE_WSS_URL",
             "BASE_CHAIN_ID",
@@ -167,6 +196,9 @@ mod tests {
             "CONVEX_URL",
             "CONVEX_SITE_URL",
             "CONVEX_ADMIN_KEY",
+            "SWEEPER_DRY_RUN",
+            "PRIVACY_POOL_ADDRESS",
+            "RELAYER_PRIVATE_KEY",
         ] {
             unsafe { env::remove_var(key) };
         }
@@ -181,12 +213,24 @@ mod tests {
             env::set_var("BASE_RPC_URL", "https://mainnet.base.org");
             env::set_var("BASE_WSS_URL", "wss://mainnet.base.org/ws");
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
+            env::set_var(
+                "PRIVACY_POOL_ADDRESS",
+                "0x1234567890abcdef1234567890abcdef12345678",
+            );
+            env::set_var(
+                "RELAYER_PRIVATE_KEY",
+                "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            );
         }
 
         let config = AppConfig::from_env().unwrap();
 
         assert_eq!(config.server.bind_addr, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(config.server.frontend_url, "http://localhost:3000");
+        assert_eq!(
+            config.server.eth_mainnet_rpc_url,
+            "https://eth.llamarpc.com"
+        );
         assert_eq!(config.watcher.chain_id, 8453);
         assert_eq!(config.watcher.network, "base");
         assert_eq!(config.watcher.required_confirmations, 6);
@@ -195,6 +239,15 @@ mod tests {
         assert_eq!(config.convex.deployment_url, "https://example.convex.cloud");
         assert_eq!(config.convex.site_url, None);
         assert_eq!(config.convex.admin_key, None);
+        assert!(!config.sweeper.dry_run);
+        assert_eq!(
+            config.sweeper.privacy_pool_address,
+            "0x1234567890abcdef1234567890abcdef12345678"
+        );
+        assert_eq!(
+            config.sweeper.relayer_private_key,
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
     }
 
     #[test]
@@ -220,6 +273,8 @@ mod tests {
             env::set_var("CONVEX_URL", "https://example.convex.cloud");
             env::set_var("CONVEX_SITE_URL", "https://example.convex.site");
             env::set_var("CONVEX_ADMIN_KEY", "test-admin-key");
+            env::set_var("PRIVACY_POOL_ADDRESS", "0xaabbccdd");
+            env::set_var("RELAYER_PRIVATE_KEY", "0x1111");
         }
 
         let config = AppConfig::from_env().unwrap();
@@ -232,5 +287,6 @@ mod tests {
             Some("https://example.convex.site")
         );
         assert_eq!(config.convex.admin_key.as_deref(), Some("test-admin-key"));
+        assert_eq!(config.sweeper.privacy_pool_address, "0xaabbccdd");
     }
 }

@@ -98,7 +98,7 @@ pub fn generate_stealth_address(recipient_pub_hex: &str) -> Result<(String, Stri
 pub fn recover_stealth_private_key(
     recipient_priv_hex: &str,
     ephemeral_pub_hex: &str,
-) -> Result<String, String> {
+) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
     // Parse recipient's private key
     let priv_bytes = hex::decode(recipient_priv_hex.trim_start_matches("0x"))
         .map_err(|e| format!("Invalid hex: {}", e))?;
@@ -143,7 +143,9 @@ pub fn recover_stealth_private_key(
         NonZeroScalar::new(stealth_scalar).into();
     let non_zero_stealth_scalar = non_zero_stealth_scalar_opt.ok_or("Stealth scalar is zero")?;
     let stealth_priv = SecretKey::from(non_zero_stealth_scalar);
-    Ok(format!("0x{}", hex::encode(stealth_priv.to_bytes())))
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&stealth_priv.to_bytes());
+    Ok(zeroize::Zeroizing::new(bytes))
 }
 
 #[cfg(test)]
@@ -159,8 +161,7 @@ mod tests {
         let recovered_priv = recover_stealth_private_key(recipient_priv, &ephem_pub).unwrap();
 
         // Verify recovered private key produces same stealth address
-        let priv_bytes = hex::decode(recovered_priv.trim_start_matches("0x")).unwrap();
-        let secret = SecretKey::from_bytes((&priv_bytes[..]).into()).unwrap();
+        let secret = SecretKey::from_bytes((&recovered_priv[..]).into()).unwrap();
         let stealth_pub = secret.public_key();
 
         let encoded = stealth_pub.to_encoded_point(false);

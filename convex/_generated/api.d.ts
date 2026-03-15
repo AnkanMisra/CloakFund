@@ -10,7 +10,10 @@
 
 import type * as deposits from "../deposits.js";
 import type * as http from "../http.js";
+import type * as notes from "../notes.js";
 import type * as paylinks from "../paylinks.js";
+import type * as sweeps from "../sweeps.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -21,7 +24,10 @@ import type {
 declare const fullApi: ApiFromModules<{
   deposits: typeof deposits;
   http: typeof http;
+  notes: typeof notes;
   paylinks: typeof paylinks;
+  sweeps: typeof sweeps;
+  users: typeof users;
 }>;
 
 /**
