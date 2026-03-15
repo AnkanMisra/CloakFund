@@ -98,6 +98,13 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 - **Chain Reorg Robustness:** Corrected the reorg flow to affirmatively call the `mark_deposit_reorged` Convex mutation when an indexed transaction shifts blocks, preventing double-counting.
 - **Safety Checks:** Added data length checks for ERC20 parsing and fallback handling for missing block hashes to prevent crashes and silent skipping.
 - **Convex Admin Authentication:** Integrated `CONVEX_ADMIN_KEY` handling in the Rust client to authenticate backend mutations safely.
+- **Watcher Deposit Matching Fixes:** Resolved an issue where transactions were silently ignored:
+  - Eliminated silent error swallowing in `process_block` by matching against `Err` explicitly.
+  - Implemented batch fetching for active stealth addresses (refreshing every 50 blocks) to prevent Convex API rate-limiting during per-transaction lookups.
+  - Ensured only successfully mined transactions are credited by checking `receipt.status == 1`.
+  - Enforced strict lowercase normalization on address comparisons.
+  - Eliminated gaps between historical catch-up and live subscription by modifying the loop to subscribe first, then process historicals.
+  - Optimized catch-up times drastically by implementing `process_block_native_only`, skipping expensive, broad log lookups for older blocks.
 
 ---
 
@@ -119,6 +126,28 @@ The finalized stealth flow uses Elliptic Curve Diffie-Hellman (ECDH) on the `sec
 - **Frontend Contract:** Provides the necessary REST layer for the frontend to negotiate secure payments without exposing any private key material.
 - **Atomicity:** Ensuring that paylinks and their generated stealth addresses are created transactionally prevents ghost records from failing operations.
 - **Robust Error Handling:** By replacing potential panics with `anyhow::Result` context mapping, the API server handles configuration issues (like malformed `FRONTEND_URL` environment variables) gracefully at startup.
+
+---
+
+## Phase 4: BitGo Consolidation Flow (Sweeper)
+
+### What was done
+- Implemented the `consolidator.rs` module in the Rust backend to securely sweep funds from ephemeral stealth addresses to the centralized BitGo treasury.
+- Added the `bitgo_client.rs` module using `reqwest` to interact with the BitGo Express API (to fulfill Sponsor Track requirements).
+- Extended the Convex data schema to fully support a sweep job state machine (`queued` -> `broadcasting` -> `completed` / `failed`).
+- Wired the `SweeperService` event loop to systematically process pending sweep jobs, reconstruct ephemeral private keys securely, calculate gas costs, and execute sweep transactions via `ethers-rs`.
+- Added new Axum API endpoints: `POST /api/v1/consolidate` to manually queue a sweep, and `POST /api/v1/bitgo/webhook` to listen for BitGo deposit confirmations.
+- Expanded `sweeper_test.sh` to provide an end-to-end integration test. It utilizes a newly added Node script (`send_eth.mjs`) to automatically trigger a real ETH deposit and test the pipeline continuously from paylink creation to treasury sweep.
+
+### How it was done
+- **Dual Sweeping Architecture:** Because BitGo's internal MPC structure cannot natively sign for mathematically derived stealth EOAs, the `Consolidator` recovers the ephemeral private key, constructs/broadcasts the sweep transaction via standard RPC, and deposits into a true BitGo Treasury Wallet. 
+- **Memory Safety:** Integrated the `zeroize` crate (`ZeroizeOnDrop`) to ensure that reconstructed ephemeral private keys are automatically wiped from memory immediately after signing the sweep transaction.
+- **Convex Job Queue:** Used Convex to store sweeping payloads (stealth addresses, ephemeral public keys), ensuring the backend can resume sweeping without data loss.
+
+### Why it was done
+- **Sponsor Alignment:** Precisely aligns with the requirements of the BitGo sponsor bounty at ETHMumbai by proving "enterprise custody integration" and "treasury automation."
+- **Security:** Sweeping to an MPC-secured BitGo vault is vastly safer than leaving user funds in hot stealth EOAs.
+- **Reliability:** A persistent job queue ensures the sweeping mechanism is resilient to network drops and node restarts.
 
 ---
 

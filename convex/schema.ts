@@ -98,6 +98,7 @@ export default defineSchema({
       v.literal("failed"),
     ),
     sweepTxHash: v.optional(v.string()),
+    destinationAddress: v.optional(v.string()),
   })
     .index("by_deposit", ["depositId"])
     .index("by_status", ["status"]),
@@ -107,4 +108,20 @@ export default defineSchema({
     latestProcessedBlock: v.optional(v.number()),
     latestConfirmedBlock: v.optional(v.number()),
   }),
+
+  privacyNotes: defineTable({
+    depositId: v.id("deposits"),
+    sweepJobId: v.id("sweepJobs"),
+    // Hex-encoded 32-byte secret (for withdraw proof)
+    secretHex: v.string(),
+    // Hex-encoded 32-byte nullifier (for withdraw proof)
+    nullifierHex: v.string(),
+    // Hex-encoded 32-byte commitment: sha256(secret || nullifier)
+    commitmentHex: v.string(),
+    // Tx hash of the deposit into PrivacyPool.sol
+    poolDepositTxHash: v.optional(v.string()),
+  })
+    .index("by_deposit", ["depositId"])
+    .index("by_sweep_job", ["sweepJobId"])
+    .index("by_commitment", ["commitmentHex"]),
 });
