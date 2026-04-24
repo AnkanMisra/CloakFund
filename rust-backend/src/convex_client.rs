@@ -118,6 +118,37 @@ impl ConvexRepository {
         }
     }
 
+    /// Revokes a paylink by presenting the hex-encoded sha256 of its revocation token.
+    ///
+    /// Returns `Err` if the paylink does not exist, has no revocation hash
+    /// stored, is already revoked, or the presented hash does not match.
+    pub async fn revoke_paylink(
+        &self,
+        paylink_id: &str,
+        revocation_token_hash: &str,
+    ) -> Result<()> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "paylinkId".to_string(),
+            convex::Value::String(paylink_id.to_string()),
+        );
+        args.insert(
+            "revocationTokenHash".to_string(),
+            convex::Value::String(revocation_token_hash.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("paylinks:revoke", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(_) => Ok(()),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("Convex logic error: {}", err.message)
+            }
+        }
+    }
+
     /// Gets a paylink by ID.
     pub async fn get_paylink(&self, paylink_id: &str) -> Result<Option<serde_json::Value>> {
         let mut args = std::collections::BTreeMap::new();
@@ -564,9 +595,7 @@ impl ConvexRepository {
         );
 
         let mut client = self.client.lock().await;
-        let result = client
-            .query("deposits:getDepositsByTxHash", args)
-            .await?;
+        let result = client.query("deposits:getDepositsByTxHash", args).await?;
 
         match result {
             convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),

@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { isPaylinkUsable } from "./paylinks";
 
 /**
  * Lookup deposits by transaction hash.
@@ -143,6 +144,11 @@ export const upsertDeposit = mutation({
     const paylink = await ctx.db.get(args.paylinkId);
     if (!paylink) {
       throw new Error("Paylink not found");
+    }
+
+    const usability = isPaylinkUsable(paylink, Date.now());
+    if (!usability.ok) {
+      throw new Error(`Paylink is ${usability.reason}`);
     }
 
     const ephemeralAddress = await ctx.db.get(args.ephemeralAddressId);

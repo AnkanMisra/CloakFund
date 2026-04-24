@@ -1,8 +1,6 @@
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-
     response::IntoResponse,
     routing::{get, post},
 };
@@ -14,6 +12,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::convex_client::ConvexRepository;
 use crate::privacy_pool;
+use crate::tokens;
 
 #[path = "ccip.rs"]
 pub mod ccip;
@@ -31,6 +30,7 @@ pub fn create_router(state: Arc<ConvexRepository>) -> anyhow::Result<Router> {
         .route("/gateway/:sender/:data", get(ccip::ccip_resolve))
         .route("/api/v1/paylink", post(create_paylink))
         .route("/api/v1/paylink/:id", get(get_paylink))
+        .route("/api/v1/paylink/:id/revoke", post(revoke_paylink))
         .route("/api/v1/consolidate", post(consolidate_funds))
         .route("/api/v1/withdraw", post(relay_withdraw))
         .route("/api/v1/deposit/status", get(deposit_status))
@@ -156,6 +156,29 @@ async fn create_paylink(
             }
         };
 
+    // Resolve the absolute expiry (Unix ms). `expires_at` wins over the
+    // convenience `expires_in_seconds` when both are supplied.
+    let expires_at: Option<u64> = payload.expires_at.or_else(|| {
+        payload.expires_in_seconds.map(|secs| {
+            let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            now_ms.saturating_add(secs.saturating_mul(1000))
+        })
+    });
+
+    // Always issue a revocation token — cheap to generate, and the alternative
+    // (no token) strands the paylink with no way to shut it off.
+    let revocation_token = tokens::generate_revocation_token();
+    let revocation_token_hash = match tokens::hash_revocation_token(&revocation_token) {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Failed to hash revocation token: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
     let new_paylink = crate::models::NewPaylinkWithAddress {
         user_id: None,
         ens_name: payload.ens_name,
@@ -166,6 +189,8 @@ async fn create_paylink(
         stealth_address: stealth_address.clone(),
         ephemeral_pubkey_hex: ephemeral_pubkey_hex.clone(),
         view_tag,
+        expires_at,
+        revocation_token_hash: Some(revocation_token_hash),
     };
 
     let paylink_val = match state.create_paylink_with_address(&new_paylink).await {
@@ -185,9 +210,50 @@ async fn create_paylink(
         paylink_id,
         stealth_address,
         ephemeral_pubkey_hex,
+        revocation_token: Some(revocation_token),
+        expires_at,
     };
 
     (axum::http::StatusCode::CREATED, Json(response)).into_response()
+}
+
+async fn revoke_paylink(
+    State(state): State<Arc<ConvexRepository>>,
+    Path(id): Path<String>,
+    Json(payload): Json<crate::models::RevokePaylinkRequest>,
+) -> impl IntoResponse {
+    let hash = match tokens::hash_revocation_token(&payload.revocation_token) {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("Invalid revocation token format: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    match state.revoke_paylink(&id, &hash).await {
+        Ok(()) => {
+            let resp = crate::models::RevokePaylinkResponse {
+                status: "revoked".to_string(),
+            };
+            (axum::http::StatusCode::OK, Json(resp)).into_response()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let status = if msg.contains("Paylink not found") {
+                axum::http::StatusCode::NOT_FOUND
+            } else if msg.contains("Invalid revocation token") || msg.contains("not revocable") {
+                axum::http::StatusCode::FORBIDDEN
+            } else if msg.contains("already revoked") {
+                axum::http::StatusCode::CONFLICT
+            } else {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(json!({ "error": msg }))).into_response()
+        }
+    }
 }
 
 async fn get_paylink(
@@ -425,14 +491,11 @@ async fn deposit_status(
                     let deposit_id = deposit["depositId"].as_str().unwrap_or("");
 
                     // Also fetch privacy note
-                    let note = state
-                        .get_privacy_note(deposit_id)
-                        .await
-                        .ok()
-                        .flatten();
+                    let note = state.get_privacy_note(deposit_id).await.ok().flatten();
 
                     // Fetch sweep job status
-                    let sweep_status = deposit.get("sweepStatus")
+                    let sweep_status = deposit
+                        .get("sweepStatus")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
 
