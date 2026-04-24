@@ -23,6 +23,9 @@ export default defineSchema({
     metadata: v.optional(v.any()),
     chainId: v.number(),
     network: v.string(),
+    expiresAt: v.optional(v.number()),
+    revoked: v.optional(v.boolean()),
+    revocationTokenHash: v.optional(v.string()),
   })
     .index("by_status", ["status"])
     .index("by_ens_name", ["ensName"])

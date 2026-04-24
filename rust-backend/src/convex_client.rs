@@ -57,9 +57,9 @@ impl ConvexRepository {
 
         match result {
             convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -83,9 +83,9 @@ impl ConvexRepository {
 
         match result {
             convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -111,9 +111,40 @@ impl ConvexRepository {
 
         match result {
             convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
+            }
+        }
+    }
+
+    /// Revokes a paylink by presenting the hex-encoded sha256 of its revocation token.
+    ///
+    /// Returns `Err` if the paylink does not exist, has no revocation hash
+    /// stored, is already revoked, or the presented hash does not match.
+    pub async fn revoke_paylink(
+        &self,
+        paylink_id: &str,
+        revocation_token_hash: &str,
+    ) -> Result<()> {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "paylinkId".to_string(),
+            convex::Value::String(paylink_id.to_string()),
+        );
+        args.insert(
+            "revocationTokenHash".to_string(),
+            convex::Value::String(revocation_token_hash.to_string()),
+        );
+
+        let mut client = self.client.lock().await;
+        let result = client.mutation("paylinks:revoke", args).await?;
+
+        match result {
+            convex::FunctionResult::Value(_) => Ok(()),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
+            convex::FunctionResult::ConvexError(err) => {
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -138,9 +169,9 @@ impl ConvexRepository {
                     Ok(Some(json))
                 }
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -176,9 +207,9 @@ impl ConvexRepository {
                     Ok(Some(match_res))
                 }
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -203,9 +234,9 @@ impl ConvexRepository {
                 let matches: Vec<DepositMatch> = serde_json::from_value(json)?;
                 Ok(matches)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -229,9 +260,9 @@ impl ConvexRepository {
                 let res: UpsertDepositResult = serde_json::from_value(convex_to_json(val))?;
                 Ok(res)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -272,9 +303,9 @@ impl ConvexRepository {
                     Ok(Some(res))
                 }
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -292,9 +323,9 @@ impl ConvexRepository {
 
         match result {
             convex::FunctionResult::Value(_) => Ok(()),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -313,9 +344,9 @@ impl ConvexRepository {
                 let res: Vec<DepositRecord> = serde_json::from_value(convex_to_json(val))?;
                 Ok(res)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -341,9 +372,9 @@ impl ConvexRepository {
 
         match result {
             convex::FunctionResult::Value(_) => Ok(()),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -365,9 +396,9 @@ impl ConvexRepository {
                     Ok(Some(res))
                 }
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -388,9 +419,9 @@ impl ConvexRepository {
                 let res: DepositStatusResponse = serde_json::from_value(convex_to_json(val))?;
                 Ok(res)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -407,9 +438,9 @@ impl ConvexRepository {
                 let res: Vec<SweepJobRecord> = serde_json::from_value(convex_to_json(val))?;
                 Ok(res)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -446,9 +477,9 @@ impl ConvexRepository {
 
         match result {
             convex::FunctionResult::Value(_) => Ok(()),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -469,9 +500,9 @@ impl ConvexRepository {
                 let id: String = serde_json::from_value(convex_to_json(val))?;
                 Ok(id)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -489,9 +520,9 @@ impl ConvexRepository {
                 let count: u64 = serde_json::from_value(convex_to_json(val))?;
                 Ok(count)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -520,9 +551,9 @@ impl ConvexRepository {
                 let id: String = serde_json::from_value(convex_to_json(val))?;
                 Ok(id)
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -548,9 +579,9 @@ impl ConvexRepository {
                     Ok(Some(note))
                 }
             }
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }
@@ -564,15 +595,13 @@ impl ConvexRepository {
         );
 
         let mut client = self.client.lock().await;
-        let result = client
-            .query("deposits:getDepositsByTxHash", args)
-            .await?;
+        let result = client.query("deposits:getDepositsByTxHash", args).await?;
 
         match result {
             convex::FunctionResult::Value(val) => Ok(convex_to_json(val)),
-            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("Convex error: {}", msg),
+            convex::FunctionResult::ErrorMessage(msg) => anyhow::bail!("{}", msg),
             convex::FunctionResult::ConvexError(err) => {
-                anyhow::bail!("Convex logic error: {}", err.message)
+                anyhow::bail!("{}", err.message)
             }
         }
     }

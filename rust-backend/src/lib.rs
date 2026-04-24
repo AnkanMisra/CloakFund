@@ -6,6 +6,7 @@ pub mod models;
 pub mod privacy_pool;
 pub mod stealth;
 pub mod sweeper;
+pub mod tokens;
 pub mod watcher;
 
 pub use api::create_router;

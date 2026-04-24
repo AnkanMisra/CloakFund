@@ -102,6 +102,12 @@ pub struct PaylinkRecord {
     pub metadata: Option<serde_json::Value>,
     pub chain_id: u64,
     pub network: String,
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+    #[serde(default)]
+    pub revoked: Option<bool>,
+    #[serde(default)]
+    pub revocation_token_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +164,10 @@ pub struct NewPaylink {
     pub metadata: Option<serde_json::Value>,
     pub chain_id: u64,
     pub network: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_token_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +185,10 @@ pub struct NewPaylinkWithAddress {
     pub stealth_address: String,
     pub ephemeral_pubkey_hex: String,
     pub view_tag: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_token_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,6 +397,11 @@ pub struct CreatePaylinkRequest {
     pub metadata: Option<serde_json::Value>,
     pub chain_id: Option<u64>,
     pub network: Option<String>,
+    /// Absolute expiry as Unix milliseconds. Takes precedence over `expires_in_seconds`.
+    pub expires_at: Option<u64>,
+    /// Relative expiry in seconds from "now". Convenience for callers that
+    /// don't want to compute a timestamp.
+    pub expires_in_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,6 +410,26 @@ pub struct CreatePaylinkResponse {
     pub paylink_id: String,
     pub stealth_address: String,
     pub ephemeral_pubkey_hex: String,
+    /// Plaintext revocation token. Returned **only** at creation time — the
+    /// server stores sha256(token) and has no way to recover the token later.
+    /// Callers must persist this value if they want the ability to revoke.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revocation_token: Option<String>,
+    /// Absolute expiry echoed back to the caller, if one was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevokePaylinkRequest {
+    pub revocation_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevokePaylinkResponse {
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -600,6 +639,8 @@ mod tests {
             metadata: None,
             chain_id: Some(1),
             network: Some("mainnet".to_string()),
+            expires_at: None,
+            expires_in_seconds: None,
         };
 
         let json = serde_json::to_string(&req).unwrap();
@@ -614,6 +655,8 @@ mod tests {
             paylink_id: "pay1".to_string(),
             stealth_address: "0xabc".to_string(),
             ephemeral_pubkey_hex: "0xdef".to_string(),
+            revocation_token: Some("0xtoken".to_string()),
+            expires_at: Some(1_700_000_000_000),
         };
 
         let json = serde_json::to_string(&res).unwrap();
@@ -621,5 +664,77 @@ mod tests {
         assert!(json.contains("paylinkId"));
         assert!(json.contains("stealthAddress"));
         assert!(json.contains("ephemeralPubkeyHex"));
+        assert!(json.contains("revocationToken"));
+        assert!(json.contains("expiresAt"));
+    }
+
+    #[test]
+    fn create_paylink_response_omits_token_when_none() {
+        let res = CreatePaylinkResponse {
+            paylink_id: "pay1".to_string(),
+            stealth_address: "0xabc".to_string(),
+            ephemeral_pubkey_hex: "0xdef".to_string(),
+            revocation_token: None,
+            expires_at: None,
+        };
+
+        let json = serde_json::to_string(&res).unwrap();
+        assert!(!json.contains("revocationToken"));
+        assert!(!json.contains("expiresAt"));
+    }
+
+    #[test]
+    fn paylink_record_deserializes_without_new_fields() {
+        // Legacy rows (written before expiry / revocation) must still parse
+        // — the three new columns all default to None.
+        let legacy = serde_json::json!({
+            "_id": "paylink_abc",
+            "_creationTime": 1_700_000_000_000.0,
+            "userId": null,
+            "ensName": null,
+            "recipientPublicKeyHex": "0x04abc",
+            "status": "active",
+            "metadata": null,
+            "chainId": 8453,
+            "network": "base",
+        });
+
+        let rec: PaylinkRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(rec.id, "paylink_abc");
+        assert_eq!(rec.expires_at, None);
+        assert_eq!(rec.revoked, None);
+        assert_eq!(rec.revocation_token_hash, None);
+    }
+
+    #[test]
+    fn paylink_record_deserializes_with_new_fields() {
+        let row = serde_json::json!({
+            "_id": "paylink_xyz",
+            "_creationTime": 1_700_000_000_000.0,
+            "userId": null,
+            "ensName": "alice.eth",
+            "recipientPublicKeyHex": "0x04abc",
+            "status": "cancelled",
+            "metadata": null,
+            "chainId": 8453,
+            "network": "base",
+            "expiresAt": 1_800_000_000_000u64,
+            "revoked": true,
+            "revocationTokenHash": "cafebabe",
+        });
+
+        let rec: PaylinkRecord = serde_json::from_value(row).unwrap();
+        assert_eq!(rec.expires_at, Some(1_800_000_000_000));
+        assert_eq!(rec.revoked, Some(true));
+        assert_eq!(rec.revocation_token_hash.as_deref(), Some("cafebabe"));
+    }
+
+    #[test]
+    fn revoke_paylink_request_serializes_camel_case() {
+        let req = RevokePaylinkRequest {
+            revocation_token: "0xfeedface".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("revocationToken"));
     }
 }
