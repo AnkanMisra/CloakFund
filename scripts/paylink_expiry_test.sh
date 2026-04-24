@@ -115,10 +115,10 @@ CREATE2=$(curl -fsS -X POST "$API_URL/api/v1/paylink" \
     -d "{\"recipientPublicKeyHex\": \"$MOCK_PUB\", \"chainId\": 84532, \"network\": \"base-sepolia\"}")
 PAYLINK_ID_2=$(echo "$CREATE2" | json_field paylinkId)
 REVOCATION_TOKEN_2=$(echo "$CREATE2" | json_field revocationToken)
-if [ -n "$PAYLINK_ID_2" ]; then
+if [ -n "$PAYLINK_ID_2" ] && [ -n "$REVOCATION_TOKEN_2" ] && [[ "$REVOCATION_TOKEN_2" == 0x* ]]; then
     ok "Created paylink $PAYLINK_ID_2"
 else
-    bad "Failed to create second paylink: $CREATE2"
+    bad "Failed to create second paylink or missing revocationToken: $CREATE2"
     exit 1
 fi
 

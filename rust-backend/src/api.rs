@@ -217,6 +217,50 @@ async fn create_paylink(
     (axum::http::StatusCode::CREATED, Json(response)).into_response()
 }
 
+async fn get_paylink(
+    State(state): State<Arc<ConvexRepository>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.get_paylink(&id).await {
+        Ok(Some(paylink)) => (axum::http::StatusCode::OK, Json(paylink)).into_response(),
+        Ok(None) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Paylink not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            let status = if is_convex_id_validation_error(&msg) {
+                axum::http::StatusCode::BAD_REQUEST
+            } else {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(json!({ "error": format!("Failed to get paylink: {}", msg) })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Detects Convex errors that stem from the caller supplying a malformed
+/// document ID (or any other value the mutation's validator rejects), so we
+/// can return `400 Bad Request` instead of masking the client error as `500`.
+///
+/// Convex's Rust client surfaces validator failures as plain messages; the
+/// exact wording varies across versions but always contains one of these
+/// well-known fragments. We match conservatively — unknown errors still fall
+/// through to the generic 500 path.
+fn is_convex_id_validation_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("argumentvalidationerror")
+        || lower.contains("value does not match validator")
+        || lower.contains("invalid id")
+        || lower.contains("id does not match")
+        || lower.contains("invalid argument")
+}
+
 async fn revoke_paylink(
     State(state): State<Arc<ConvexRepository>>,
     Path(id): Path<String>,
@@ -242,7 +286,9 @@ async fn revoke_paylink(
         }
         Err(e) => {
             let msg = e.to_string();
-            let status = if msg.contains("Paylink not found") {
+            let status = if is_convex_id_validation_error(&msg) {
+                axum::http::StatusCode::BAD_REQUEST
+            } else if msg.contains("Paylink not found") {
                 axum::http::StatusCode::NOT_FOUND
             } else if msg.contains("Invalid revocation token") || msg.contains("not revocable") {
                 axum::http::StatusCode::FORBIDDEN
@@ -253,25 +299,6 @@ async fn revoke_paylink(
             };
             (status, Json(json!({ "error": msg }))).into_response()
         }
-    }
-}
-
-async fn get_paylink(
-    State(state): State<Arc<ConvexRepository>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    match state.get_paylink(&id).await {
-        Ok(Some(paylink)) => (axum::http::StatusCode::OK, Json(paylink)).into_response(),
-        Ok(None) => (
-            axum::http::StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Paylink not found" })),
-        )
-            .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to get paylink: {}", e) })),
-        )
-            .into_response(),
     }
 }
 
@@ -552,5 +579,46 @@ mod tests {
     async fn test_health_check() {
         let response = health_check().await.into_response();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn convex_id_validator_errors_are_classified_as_client_errors() {
+        // Sampled wordings from the Convex Rust client when a caller passes
+        // a malformed document id. Matching is case-insensitive and
+        // substring-based on purpose — wording drifts across Convex versions.
+        let samples = [
+            "ArgumentValidationError: Value does not match validator",
+            "Convex logic error: Invalid argument `paylinkId`: Id does not match",
+            "Invalid id: foo",
+            "invalid ID",
+            "ARGUMENTVALIDATIONERROR at deposit time",
+        ];
+        for s in samples {
+            assert!(
+                is_convex_id_validation_error(s),
+                "expected to classify as 400: {s}",
+            );
+        }
+    }
+
+    #[test]
+    fn convex_logical_errors_are_not_classified_as_client_errors() {
+        // Domain errors that should keep their specific 403/404/409 mapping
+        // and fall through to the existing substring matches. None of these
+        // should be misclassified as a 400.
+        let samples = [
+            "Convex logic error: Paylink not found",
+            "Convex logic error: Invalid revocation token",
+            "Convex logic error: Paylink is already revoked",
+            "Convex logic error: Paylink is not revocable (no revocation token was set)",
+            "websocket disconnected",
+            "timed out",
+        ];
+        for s in samples {
+            assert!(
+                !is_convex_id_validation_error(s),
+                "must not classify as 400: {s}",
+            );
+        }
     }
 }
