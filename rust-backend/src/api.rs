@@ -229,29 +229,34 @@ async fn get_paylink(
         )
             .into_response(),
         Err(e) => {
-            let msg = e.to_string();
-            let status = if is_convex_id_validation_error(&msg) {
-                axum::http::StatusCode::BAD_REQUEST
+            let raw = e.to_string();
+            if is_convex_id_validation_error(&raw) {
+                tracing::warn!("get_paylink rejected malformed id: {}", raw);
+                (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Invalid paylink id" })),
+                )
+                    .into_response()
             } else {
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (
-                status,
-                Json(json!({ "error": format!("Failed to get paylink: {}", msg) })),
-            )
-                .into_response()
+                tracing::error!("get_paylink backend error: {}", raw);
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Internal server error" })),
+                )
+                    .into_response()
+            }
         }
     }
 }
 
-/// Detects Convex errors that stem from the caller supplying a malformed
+/// Detects backend errors that stem from the caller supplying a malformed
 /// document ID (or any other value the mutation's validator rejects), so we
 /// can return `400 Bad Request` instead of masking the client error as `500`.
 ///
-/// Convex's Rust client surfaces validator failures as plain messages; the
-/// exact wording varies across versions but always contains one of these
-/// well-known fragments. We match conservatively — unknown errors still fall
-/// through to the generic 500 path.
+/// The underlying platform's Rust client surfaces validator failures as plain
+/// messages; the exact wording drifts across versions but always contains one
+/// of these well-known fragments. We match conservatively — unknown errors
+/// fall through to the generic 500 path.
 fn is_convex_id_validation_error(msg: &str) -> bool {
     let lower = msg.to_lowercase();
     lower.contains("argumentvalidationerror")
@@ -261,6 +266,60 @@ fn is_convex_id_validation_error(msg: &str) -> bool {
         || lower.contains("invalid argument")
 }
 
+/// Whitelisted client-visible outcomes for the revoke endpoint.
+///
+/// Mapping backend error strings to a small closed enum means clients only
+/// ever see messages we've intentionally exposed — no raw platform errors,
+/// no "Convex"-style prefixes, and no wording drift leaking implementation
+/// details. Unknown errors collapse to `ServerError` and are logged raw
+/// server-side for debugging.
+enum RevokeOutcome {
+    NotFound,
+    InvalidToken,
+    AlreadyRevoked,
+    BadRequest,
+    ServerError,
+}
+
+impl RevokeOutcome {
+    fn status(&self) -> axum::http::StatusCode {
+        match self {
+            Self::NotFound => axum::http::StatusCode::NOT_FOUND,
+            Self::InvalidToken => axum::http::StatusCode::FORBIDDEN,
+            Self::AlreadyRevoked => axum::http::StatusCode::CONFLICT,
+            Self::BadRequest => axum::http::StatusCode::BAD_REQUEST,
+            Self::ServerError => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self {
+            Self::NotFound => "Paylink not found",
+            Self::InvalidToken => "Invalid revocation token",
+            Self::AlreadyRevoked => "Paylink is already revoked",
+            Self::BadRequest => "Invalid paylink id",
+            Self::ServerError => "Internal server error",
+        }
+    }
+}
+
+fn classify_revoke_error(msg: &str) -> RevokeOutcome {
+    // Order matters: check for validator errors first so a malformed id
+    // doesn't accidentally match the "Paylink not found" substring in a
+    // wrapped error chain.
+    if is_convex_id_validation_error(msg) {
+        RevokeOutcome::BadRequest
+    } else if msg.contains("Paylink not found") {
+        RevokeOutcome::NotFound
+    } else if msg.contains("already revoked") {
+        RevokeOutcome::AlreadyRevoked
+    } else if msg.contains("Invalid revocation token") {
+        RevokeOutcome::InvalidToken
+    } else {
+        RevokeOutcome::ServerError
+    }
+}
+
 async fn revoke_paylink(
     State(state): State<Arc<ConvexRepository>>,
     Path(id): Path<String>,
@@ -268,10 +327,12 @@ async fn revoke_paylink(
 ) -> impl IntoResponse {
     let hash = match tokens::hash_revocation_token(&payload.revocation_token) {
         Ok(h) => h,
-        Err(e) => {
+        Err(_) => {
+            // Deliberately do not echo the parser error back — it can include
+            // the offending input. "Invalid revocation token" is enough.
             return (
                 axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({ "error": format!("Invalid revocation token format: {}", e) })),
+                Json(json!({ "error": "Invalid revocation token" })),
             )
                 .into_response();
         }
@@ -285,19 +346,22 @@ async fn revoke_paylink(
             (axum::http::StatusCode::OK, Json(resp)).into_response()
         }
         Err(e) => {
-            let msg = e.to_string();
-            let status = if is_convex_id_validation_error(&msg) {
-                axum::http::StatusCode::BAD_REQUEST
-            } else if msg.contains("Paylink not found") {
-                axum::http::StatusCode::NOT_FOUND
-            } else if msg.contains("Invalid revocation token") || msg.contains("not revocable") {
-                axum::http::StatusCode::FORBIDDEN
-            } else if msg.contains("already revoked") {
-                axum::http::StatusCode::CONFLICT
+            let raw = e.to_string();
+            let outcome = classify_revoke_error(&raw);
+            if matches!(outcome, RevokeOutcome::ServerError) {
+                tracing::error!("revoke_paylink backend error: {}", raw);
             } else {
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (status, Json(json!({ "error": msg }))).into_response()
+                tracing::debug!(
+                    "revoke_paylink classified: {} / raw={}",
+                    outcome.message(),
+                    raw
+                );
+            }
+            (
+                outcome.status(),
+                Json(json!({ "error": outcome.message() })),
+            )
+                .into_response()
         }
     }
 }
@@ -607,10 +671,9 @@ mod tests {
         // and fall through to the existing substring matches. None of these
         // should be misclassified as a 400.
         let samples = [
-            "Convex logic error: Paylink not found",
-            "Convex logic error: Invalid revocation token",
-            "Convex logic error: Paylink is already revoked",
-            "Convex logic error: Paylink is not revocable (no revocation token was set)",
+            "Paylink not found",
+            "Invalid revocation token",
+            "Paylink is already revoked",
             "websocket disconnected",
             "timed out",
         ];
@@ -619,6 +682,58 @@ mod tests {
                 !is_convex_id_validation_error(s),
                 "must not classify as 400: {s}",
             );
+        }
+    }
+
+    #[test]
+    fn classify_revoke_error_maps_known_wordings() {
+        assert!(matches!(
+            classify_revoke_error("Paylink not found"),
+            RevokeOutcome::NotFound
+        ));
+        assert!(matches!(
+            classify_revoke_error("Invalid revocation token"),
+            RevokeOutcome::InvalidToken
+        ));
+        assert!(matches!(
+            classify_revoke_error("Paylink is already revoked"),
+            RevokeOutcome::AlreadyRevoked
+        ));
+        assert!(matches!(
+            classify_revoke_error("ArgumentValidationError: Value does not match validator"),
+            RevokeOutcome::BadRequest
+        ));
+    }
+
+    #[test]
+    fn classify_revoke_error_falls_back_to_server_error_for_unknown() {
+        assert!(matches!(
+            classify_revoke_error("something unexpected happened"),
+            RevokeOutcome::ServerError
+        ));
+        assert!(matches!(
+            classify_revoke_error(""),
+            RevokeOutcome::ServerError
+        ));
+    }
+
+    #[test]
+    fn revoke_outcome_messages_are_sanitized_with_no_tech_leakage() {
+        // Guardrail: the strings we ever send to clients must not mention
+        // the underlying backend platform or include the substring "error:"
+        // (which would suggest a leaked wrapper prefix).
+        let outcomes = [
+            RevokeOutcome::NotFound,
+            RevokeOutcome::InvalidToken,
+            RevokeOutcome::AlreadyRevoked,
+            RevokeOutcome::BadRequest,
+            RevokeOutcome::ServerError,
+        ];
+        for o in &outcomes {
+            let m = o.message().to_lowercase();
+            assert!(!m.contains("convex"), "leaked backend name: {m}");
+            assert!(!m.contains("argumentvalidation"), "leaked raw error: {m}");
+            assert!(!m.contains("error:"), "looks like a leaked prefix: {m}");
         }
     }
 }

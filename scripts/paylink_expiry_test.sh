@@ -16,10 +16,17 @@
 
 set -u  # intentionally NOT -e — we want to print context on failure
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || { echo "Failed to cd to repo root"; exit 1; }
 
 API_URL="${API_URL:-http://localhost:8080}"
 MOCK_PUB="${RECIPIENT_PUBLIC_KEY_HEX:-0x04b10912af0c04aa473bebc86f36f44eed2bbbc6bcad611287140975fafe159974b8ac6bccd806e4647e45eda540d9ae05aed61ebff5d0bff409e813d2ad33d7f6}"
+
+# Private per-run temp files for curl response bodies. Avoids collisions when
+# the suite runs in parallel CI matrices and removes world-readable leftovers.
+TMP_BAD=$(mktemp)
+TMP_OK=$(mktemp)
+TMP_AGAIN=$(mktemp)
+trap 'rm -f "$TMP_BAD" "$TMP_OK" "$TMP_AGAIN"' EXIT
 
 pass=0
 fail=0
@@ -125,26 +132,26 @@ fi
 # Step 5: revoke with wrong token -> 403.
 say "Revoking with WRONG token — expect 403"
 WRONG_TOKEN="0x$(printf '0%.0s' {1..64})"
-BAD_HTTP=$(curl -s -o /tmp/_revoke_bad.json -w "%{http_code}" -X POST \
+BAD_HTTP=$(curl -s -o "$TMP_BAD" -w "%{http_code}" -X POST \
     "$API_URL/api/v1/paylink/$PAYLINK_ID_2/revoke" \
     -H "Content-Type: application/json" \
     -d "{\"revocationToken\": \"$WRONG_TOKEN\"}")
 if [ "$BAD_HTTP" = "403" ]; then
     ok "got HTTP 403"
 else
-    bad "expected 403, got $BAD_HTTP — body: $(cat /tmp/_revoke_bad.json)"
+    bad "expected 403, got $BAD_HTTP — body: $(cat "$TMP_BAD")"
 fi
 
 # Step 6: revoke with correct token -> 200.
 say "Revoking with CORRECT token — expect 200"
-GOOD_HTTP=$(curl -s -o /tmp/_revoke_ok.json -w "%{http_code}" -X POST \
+GOOD_HTTP=$(curl -s -o "$TMP_OK" -w "%{http_code}" -X POST \
     "$API_URL/api/v1/paylink/$PAYLINK_ID_2/revoke" \
     -H "Content-Type: application/json" \
     -d "{\"revocationToken\": \"$REVOCATION_TOKEN_2\"}")
 if [ "$GOOD_HTTP" = "200" ]; then
     ok "got HTTP 200"
 else
-    bad "expected 200, got $GOOD_HTTP — body: $(cat /tmp/_revoke_ok.json)"
+    bad "expected 200, got $GOOD_HTTP — body: $(cat "$TMP_OK")"
 fi
 
 # Step 7: paylink is now revoked + not usable.
@@ -161,14 +168,28 @@ fi
 
 # Step 8: double-revoke -> 409.
 say "Re-revoking — expect 409"
-AGAIN_HTTP=$(curl -s -o /tmp/_revoke_again.json -w "%{http_code}" -X POST \
+AGAIN_HTTP=$(curl -s -o "$TMP_AGAIN" -w "%{http_code}" -X POST \
     "$API_URL/api/v1/paylink/$PAYLINK_ID_2/revoke" \
     -H "Content-Type: application/json" \
     -d "{\"revocationToken\": \"$REVOCATION_TOKEN_2\"}")
 if [ "$AGAIN_HTTP" = "409" ]; then
-    ok "got HTTP 409"
+    ok "got HTTP 409 on correct-token re-revoke"
 else
-    bad "expected 409, got $AGAIN_HTTP — body: $(cat /tmp/_revoke_again.json)"
+    bad "expected 409, got $AGAIN_HTTP — body: $(cat "$TMP_AGAIN")"
+fi
+
+# Step 9: already-revoked paylink with WRONG token must also return 409 —
+# proves the revoke check runs before the token check so an attacker cannot
+# use the 403/409 split as a token-confirmation oracle.
+say "Re-revoking with WRONG token — expect 409 (no 403 oracle)"
+AGAIN_WRONG_HTTP=$(curl -s -o "$TMP_AGAIN" -w "%{http_code}" -X POST \
+    "$API_URL/api/v1/paylink/$PAYLINK_ID_2/revoke" \
+    -H "Content-Type: application/json" \
+    -d "{\"revocationToken\": \"$WRONG_TOKEN\"}")
+if [ "$AGAIN_WRONG_HTTP" = "409" ]; then
+    ok "got HTTP 409 on wrong-token re-revoke (oracle closed)"
+else
+    bad "expected 409 (oracle closed), got $AGAIN_WRONG_HTTP — body: $(cat "$TMP_AGAIN")"
 fi
 
 echo ""

@@ -445,31 +445,28 @@ export const getActiveStealthAddresses = query({
     const filtered = addresses.filter((a) => a.chainId === args.chainId);
     const now = Date.now();
 
+    // Fetch every unique referenced paylink in parallel (one round-trip per
+    // unique id). Previously this was a sequential await inside the loop,
+    // which was O(K) round-trips where K is the number of unique paylinks.
+    const uniqueIds = Array.from(
+      new Set(filtered.map((a) => a.paylinkId as unknown as string)),
+    );
+    const fetched = await Promise.all(
+      uniqueIds.map((id) => ctx.db.get(id as typeof filtered[number]["paylinkId"])),
+    );
     const paylinkCache = new Map<string, PaylinkRow | null>();
-    const results: {
-      paylinkId: (typeof filtered)[number]["paylinkId"];
-      ephemeralAddressId: (typeof filtered)[number]["_id"];
-      stealthAddress: string;
-    }[] = [];
+    uniqueIds.forEach((id, i) => paylinkCache.set(id, fetched[i] ?? null));
 
-    for (const a of filtered) {
-      const key = a.paylinkId as unknown as string;
-      let paylink = paylinkCache.get(key);
-      if (paylink === undefined) {
-        paylink = (await ctx.db.get(a.paylinkId)) ?? null;
-        paylinkCache.set(key, paylink);
-      }
-      if (!paylink) continue;
-      if (!isPaylinkUsable(paylink, now).ok) continue;
-
-      results.push({
+    return filtered
+      .filter((a) => {
+        const paylink = paylinkCache.get(a.paylinkId as unknown as string);
+        return paylink != null && isPaylinkUsable(paylink, now).ok;
+      })
+      .map((a) => ({
         paylinkId: a.paylinkId,
         ephemeralAddressId: a._id,
         stealthAddress: a.stealthAddress,
-      });
-    }
-
-    return results;
+      }));
   },
 });
 
@@ -542,18 +539,26 @@ export const revoke = mutation({
       throw new Error("Paylink not found");
     }
 
+    // Check revoked FIRST — before the token comparison — so that an
+    // already-revoked paylink returns the same 409 regardless of whether the
+    // caller holds the correct token. This removes a token-confirmation
+    // oracle where a correct token → 409 and a wrong token → 403 would have
+    // leaked whether the caller has the right token for a revoked paylink.
+    if (paylink.revoked === true) {
+      throw new Error("Paylink is already revoked");
+    }
+
+    // Unify "not revocable" and "wrong token" under the same client-facing
+    // error so an attacker cannot distinguish a paylink that has no
+    // revocation hash from one that has a different hash. Both map to 403.
     if (!paylink.revocationTokenHash) {
-      throw new Error("Paylink is not revocable (no revocation token was set)");
+      throw new Error("Invalid revocation token");
     }
 
     const presented = args.revocationTokenHash.trim().toLowerCase();
     const stored = paylink.revocationTokenHash.trim().toLowerCase();
     if (presented.length !== stored.length || presented !== stored) {
       throw new Error("Invalid revocation token");
-    }
-
-    if (paylink.revoked === true) {
-      throw new Error("Paylink is already revoked");
     }
 
     await ctx.db.patch(args.paylinkId, {
@@ -565,11 +570,11 @@ export const revoke = mutation({
       .query("ephemeralAddresses")
       .withIndex("by_paylink", (q) => q.eq("paylinkId", args.paylinkId))
       .collect();
-    for (const e of ephems) {
-      if (e.status !== "swept" && e.status !== "expired") {
-        await ctx.db.patch(e._id, { status: "expired" });
-      }
-    }
+    await Promise.all(
+      ephems
+        .filter((e) => e.status !== "swept" && e.status !== "expired")
+        .map((e) => ctx.db.patch(e._id, { status: "expired" })),
+    );
 
     return null;
   },
